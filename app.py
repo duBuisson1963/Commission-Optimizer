@@ -33,8 +33,7 @@ def run_scenario(entries, mid, w_map, m_pay, logic_type):
         sum_seg += sc
         lines.append(f"{e['name']:<25} {ach*100:>7.1f}% R {sc:>12,.2f}")
     
-    total = max(sum_seg, m_pay) if logic_type == 'absorbed' else sum_seg + 
-m_pay
+    total = max(sum_seg, m_pay) if logic_type == 'absorbed' else sum_seg + m_pay
     return {"lines": lines, "tot": total}
 
 # --- UI SETUP ---
