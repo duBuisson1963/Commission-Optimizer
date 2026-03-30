@@ -99,8 +99,7 @@ use_container_width=True):
         ta = sum(Decimal(str(e["act"])) for e in entries)
         tt = sum(Decimal(str(e["tar"])) for e in entries)
         
-        rev_ach = (ta / tt * 100).quantize(Decimal('0.01')) if tt > 0 else 
-Decimal('0')
+        rev_ach = (ta / tt * 100).quantize(Decimal('0.01')) if tt > 0 else Decimal('0')
         m = get_mult(rev_ach)
         m_pay = (mid * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
         
