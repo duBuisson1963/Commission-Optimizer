@@ -111,8 +111,7 @@ use_container_width=True):
         
         # Output Texts
         audit1 = f"--- SCENARIO 1: SABC APPLIED CALCULATION ---\n"
-        audit1 += f"Weights Applied: 45/24/6 | Total Ach: {rev_ach}% | 
-Mult: {m}x\n"
+        audit1 += f"Weights Applied: 45/24/6 | Total Ach: {rev_ach}% | Mult: {m}x\n"
         audit1 += f"{'STREAM':<25} {'% ACH':>8} {'SABC PAID':>14}\n" + 
 "-"*50 + "\n"
         audit1 += "\n".join(applied["lines"]) + "\n" + "-"*50 + "\n"
