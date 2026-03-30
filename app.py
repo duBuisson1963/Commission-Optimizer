@@ -115,25 +115,20 @@ use_container_width=True):
         audit1 += f"{'STREAM':<25} {'% ACH':>8} {'SABC PAID':>14}\n" + "-"*50 + "\n"
         audit1 += "\n".join(applied["lines"]) + "\n" + "-"*50 + "\n"
         audit1 += f"{'MULTIPLIER PAYOUT:':<35} R {m_pay:>12,.2f}\n"
-        audit1 += f"{'FINAL SABC PAYOUT (Absorbed):':<35} R 
-{applied['tot']:>12,.2f}\n"
+        audit1 += f"{'FINAL SABC PAYOUT (Absorbed):':<35} R {applied['tot']:>12,.2f}\n"
 
         audit2 = f"--- SCENARIO 2: POLICY DICTATED CALCULATION ---\n"
-        audit2 += f"Weights Applied: 40/30/10 | Total Ach: {rev_ach}% | 
-Mult: {m}x\n"
-        audit2 += f"{'STREAM':<25} {'% ACH':>8} {'POLICY DUE':>14}\n" + 
-"-"*50 + "\n"
+        audit2 += f"Weights Applied: 40/30/10 | Total Ach: {rev_ach}% | Mult: {m}x\n"
+        audit2 += f"{'STREAM':<25} {'% ACH':>8} {'POLICY DUE':>14}\n" + "-"*50 + "\n"
         audit2 += "\n".join(policy["lines"]) + "\n" + "-"*50 + "\n"
         audit2 += f"{'MULTIPLIER PAYOUT:':<35} R {m_pay:>12,.2f}\n"
-        audit2 += f"{'FINAL POLICY DUE (Additive):':<35} R 
-{policy['tot']:>12,.2f}\n"
+        audit2 += f"{'FINAL POLICY DUE (Additive):':<35} R {policy['tot']:>12,.2f}\n"
 
         shortfall = policy['tot'] - applied['tot']
         
         adv = "--- FORENSIC DISCREPANCY SUMMARY ---\n\n"
         adv += f"1. SABC APPLIED PAYOUT:  R {applied['tot']:,.2f}\n"
-        adv += f"2. POLICY DICTATED DUE:  R {policy['tot']:,.2f}\n" + 
-"-"*40 + "\n"
+        adv += f"2. POLICY DICTATED DUE:  R {policy['tot']:,.2f}\n" + "-"*40 + "\n"
         adv += f"TOTAL SHORTFALL OWED:    R {shortfall:,.2f}\n"
 
         col_out1, col_out2 = st.columns(2)
