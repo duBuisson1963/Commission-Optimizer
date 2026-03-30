@@ -47,8 +47,7 @@ with col1:
     midpoint_input = st.text_input("Target Commission (Midpoint):", 
 value="27276.33")
 with col2:
-    uploaded_file = st.file_uploader("Upload SABC Statement (CSV or 
-Excel)", type=['csv', 'xlsx'])
+    uploaded_file = st.file_uploader("Upload SABC Statement (CSV or Excel)", type=['csv', 'xlsx'])
 
 segments = ["Digital", "Radio Classic", "Radio Sponsorship", "Radio Sport 
 Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship"]
