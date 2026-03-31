@@ -14,6 +14,17 @@ POLICY_W = {
     "Radio Sponsorship": 10.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5
 }
 
+# --- SALARY SCALES (ANNUAL) ---
+MIDPOINTS_2021 = {
+    '300': 459910, '401': 416379, '402': 327316, '403': 254447, 
+    '404': 199286, '405': 153057, '406': 135132, '407': 100704, '408': 71634
+}
+
+MIDPOINTS_CURRENT = {
+    '300': 480606, '401': 435116, '402B': 394241, '402': 342045, 
+    '403': 265897, '404': 208254, '405': 159945, '405A': 141872, '406B': 122336
+}
+
 def get_mult(score):
     if score < 100: return Decimal('0.00')
     if score == 100: return Decimal('0.50')
@@ -42,7 +53,10 @@ st.title("BEMAWU Dual-Profile Forensic Simulator")
 # --- INPUTS ---
 col1, col2 = st.columns([1, 2])
 with col1:
-    midpoint_input = st.text_input("Target Commission (Midpoint):", value="27276.33")
+    midpoint_input = st.text_input("Target Commission (Manual Midpoint):", value="27276.33")
+    scale_2021 = st.selectbox("2021 Midpoints (Scale Code):", list(MIDPOINTS_2021.keys()))
+    scale_current = st.selectbox("Current Midpoints (Scale Code):", list(MIDPOINTS_CURRENT.keys()))
+    
 with col2:
     uploaded_file = st.file_uploader("Upload SABC Statement (CSV or Excel)", type=['csv', 'xlsx'])
 
@@ -84,60 +98,86 @@ for s in segments:
 # --- CALCULATION ---
 if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True):
     try:
-        mid = Decimal(str(midpoint_input).replace(',', ''))
+        # Base Midpoints
+        mid_manual = Decimal(str(midpoint_input).replace(',', ''))
+        mid_2021 = (Decimal(str(MIDPOINTS_2021[scale_2021])) / 12).quantize(Decimal('0.01'), ROUND_HALF_UP)
+        mid_curr = (Decimal(str(MIDPOINTS_CURRENT[scale_current])) / 12).quantize(Decimal('0.01'), ROUND_HALF_UP)
+        
+        # Achievement & Multiplier
         ta = sum(Decimal(str(e["act"])) for e in entries)
         tt = sum(Decimal(str(e["tar"])) for e in entries)
-        
         rev_ach = (ta / tt * 100).quantize(Decimal('0.01')) if tt > 0 else Decimal('0')
         m = get_mult(rev_ach)
-        m_pay = (mid * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
         
-        applied = run_scenario(entries, mid, STATEMENT_W, m_pay, 'absorbed')
-        policy = run_scenario(entries, mid, POLICY_W, m_pay, 'additive')
+        # Multiplier Payouts based on midpoints
+        m_pay_manual = (mid_manual * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
+        m_pay_2021 = (mid_2021 * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
+        m_pay_curr = (mid_curr * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
         
-        st.header(f"SABC APPLIED PAYOUT: R {applied['tot']:,.2f}")
+        # Scenario Runs
+        applied = run_scenario(entries, mid_manual, STATEMENT_W, m_pay_manual, 'absorbed')
+        policy_man = run_scenario(entries, mid_manual, POLICY_W, m_pay_manual, 'additive')
+        policy_2021 = run_scenario(entries, mid_2021, POLICY_W, m_pay_2021, 'additive')
+        policy_curr = run_scenario(entries, mid_curr, POLICY_W, m_pay_curr, 'additive')
         
-        audit1 = f"--- SCENARIO 1: SABC APPLIED CALCULATION ---\n"
-        audit1 += f"Weights Applied: 45/24/6 | Total Ach: {rev_ach}% | Mult: {m}x\n"
-        audit1 += f"{'STREAM':<25} {'% ACH':>8} {'SABC PAID':>14}\n" + "-"*50 + "\n"
-        audit1 += "\n".join(applied["lines"]) + "\n" + "-"*50 + "\n"
-        audit1 += f"{'MULTIPLIER PAYOUT:':<35} R {m_pay:>12,.2f}\n"
-        audit1 += f"{'FINAL SABC PAYOUT (Absorbed):':<35} R {applied['tot']:>12,.2f}\n"
+        st.header(f"SABC APPLIED PAYOUT (Manual Midpoint): R {applied['tot']:,.2f}")
+        
+        # --- GENERATE STRINGS ---
+        def build_audit_block(title, mid_val, mid_label, weights, lines, m_pay, tot, label_tot):
+            b = f"--- {title} ---\n"
+            b += f"Midpoint Used: R {mid_val:,.2f} {mid_label}\n"
+            b += f"Weights Applied: {weights} | Total Ach: {rev_ach}% | Mult: {m}x\n"
+            b += f"{'STREAM':<25} {'% ACH':>8} {'PAYOUT DUE':>14}\n" + "-"*50 + "\n"
+            b += "\n".join(lines) + "\n" + "-"*50 + "\n"
+            b += f"{'MULTIPLIER PAYOUT:':<35} R {m_pay:>12,.2f}\n"
+            b += f"{label_tot:<35} R {tot:>12,.2f}\n"
+            return b
 
-        audit2 = f"--- SCENARIO 2: POLICY DICTATED CALCULATION ---\n"
-        audit2 += f"Weights Applied: 40/30/10 | Total Ach: {rev_ach}% | Mult: {m}x\n"
-        audit2 += f"{'STREAM':<25} {'% ACH':>8} {'POLICY DUE':>14}\n" + "-"*50 + "\n"
-        audit2 += "\n".join(policy["lines"]) + "\n" + "-"*50 + "\n"
-        audit2 += f"{'MULTIPLIER PAYOUT:':<35} R {m_pay:>12,.2f}\n"
-        audit2 += f"{'FINAL POLICY DUE (Additive):':<35} R {policy['tot']:>12,.2f}\n"
+        audit1 = build_audit_block(
+            "SCENARIO 1: SABC APPLIED CALCULATION", mid_manual, "(Manual Entry)", "45/24/6", 
+            applied["lines"], m_pay_manual, applied["tot"], "FINAL SABC PAYOUT (Absorbed):"
+        )
+        audit2 = build_audit_block(
+            "SCENARIO 2: POLICY DICTATED CALCULATION", mid_manual, "(Manual Entry)", "40/30/10", 
+            policy_man["lines"], m_pay_manual, policy_man["tot"], "FINAL POLICY DUE (Additive):"
+        )
+        audit3 = build_audit_block(
+            "SCENARIO 3: POLICY DICTATED (2021 SCALES)", mid_2021, f"(Scale {scale_2021} / 12)", "40/30/10", 
+            policy_2021["lines"], m_pay_2021, policy_2021["tot"], "FINAL POLICY DUE (Additive):"
+        )
+        audit4 = build_audit_block(
+            "SCENARIO 4: POLICY DICTATED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", "40/30/10", 
+            policy_curr["lines"], m_pay_curr, policy_curr["tot"], "FINAL POLICY DUE (Additive):"
+        )
 
-        shortfall = policy['tot'] - applied['tot']
-        
         adv = "--- FORENSIC DISCREPANCY SUMMARY ---\n\n"
-        adv += f"1. SABC APPLIED PAYOUT:  R {applied['tot']:,.2f}\n"
-        adv += f"2. POLICY DICTATED DUE:  R {policy['tot']:,.2f}\n" + "-"*40 + "\n"
-        adv += f"TOTAL SHORTFALL OWED:    R {shortfall:,.2f}\n"
+        adv += f"1. SABC APPLIED PAYOUT (Manual):         R {applied['tot']:>12,.2f}\n"
+        adv += f"2. POLICY DICTATED DUE (Manual):         R {policy_man['tot']:>12,.2f}\n"
+        adv += f"3. POLICY DUE @ 2021 (Scale {scale_2021:<4}):      R {policy_2021['tot']:>12,.2f}\n"
+        adv += f"4. POLICY DUE @ Current (Scale {scale_current:<4}):   R {policy_curr['tot']:>12,.2f}\n"
+        adv += "-"*56 + "\n"
+        adv += f"SHORTFALL 1 (Policy vs Applied):         R {(policy_man['tot'] - applied['tot']):>12,.2f}\n"
+        adv += f"SHORTFALL 2 (2021 vs Applied):           R {(policy_2021['tot'] - applied['tot']):>12,.2f}\n"
+        adv += f"SHORTFALL 3 (Current vs Applied):        R {(policy_curr['tot'] - applied['tot']):>12,.2f}\n"
 
-        # Display on screen
+        # --- DISPLAY ---
         col_out1, col_out2 = st.columns(2)
-        with col_out1:
-            st.code(audit1 + "\n\n" + audit2, language="text")
-        with col_out2:
-            st.code(adv, language="text")
+        with col_out1: st.code(audit1 + "\n\n" + audit2, language="text")
+        with col_out2: st.code(audit3 + "\n\n" + audit4, language="text")
+        st.code(adv, language="text")
             
-        # PDF Generation
-        full_report = audit1 + "\n\n" + audit2 + "\n\n" + adv
+        # --- PDF GENERATION ---
+        full_report = audit1 + "\n\n" + audit2 + "\n\n" + audit3 + "\n\n" + audit4 + "\n\n" + adv
         pdf = FPDF()
         pdf.add_page()
-        pdf.set_font("Courier", size=9)
-        pdf.multi_cell(0, 5, full_report.encode('latin-1', 'replace').decode('latin-1'))
+        pdf.set_font("Courier", size=8)
+        pdf.multi_cell(0, 4, full_report.encode('latin-1', 'replace').decode('latin-1'))
         pdf_bytes = pdf.output(dest='S').encode('latin-1')
         
-        # Download Button
         st.download_button(
-            label="📄 Download PDF Audit Report",
+            label="📄 Download Full PDF Audit Report",
             data=pdf_bytes,
-            file_name="BEMAWU_Forensic_Audit.pdf",
+            file_name="BEMAWU_Comprehensive_Forensic_Audit.pdf",
             mime="application/pdf",
             type="primary"
         )
