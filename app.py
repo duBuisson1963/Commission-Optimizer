@@ -1,18 +1,17 @@
 import streamlit as st
 import pandas as pd
 from decimal import Decimal, ROUND_HALF_UP
+from fpdf import FPDF
 
 # --- BASELINE WEIGHTS (v10.35) ---
 STATEMENT_W = {
     "Radio Classic": 45.0, "TV Classic": 24.0, "TV Sponsorship": 6.0,
-    "Radio Sponsorship": 15.0, "Digital": 5.0, "TV Sport Sponsorship": 
-2.5, "Radio Sport Sponsorship": 2.5
+    "Radio Sponsorship": 15.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5
 }
 
 POLICY_W = {
     "TV Classic": 40.0, "Radio Classic": 30.0, "TV Sponsorship": 10.0,
-    "Radio Sponsorship": 10.0, "Digital": 5.0, "TV Sport Sponsorship": 
-2.5, "Radio Sport Sponsorship": 2.5
+    "Radio Sponsorship": 10.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5
 }
 
 def get_mult(score):
@@ -43,8 +42,7 @@ st.title("BEMAWU Dual-Profile Forensic Simulator")
 # --- INPUTS ---
 col1, col2 = st.columns([1, 2])
 with col1:
-    midpoint_input = st.text_input("Target Commission (Midpoint):", 
-value="27276.33")
+    midpoint_input = st.text_input("Target Commission (Midpoint):", value="27276.33")
 with col2:
     uploaded_file = st.file_uploader("Upload SABC Statement (CSV or Excel)", type=['csv', 'xlsx'])
 
@@ -52,16 +50,13 @@ segments = ["Digital", "Radio Classic", "Radio Sponsorship", "Radio Sport Sponso
 entries = []
 
 st.subheader("Manual Entry / Verification")
-# Create a grid for the inputs
 cols = st.columns(3)
 cols[0].write("**Segment Name**")
 cols[1].write("**Actual Revenue**")
 cols[2].write("**Target Revenue**")
 
-# Default values
 form_data = {s: {"act": 0.0, "tar": 1.0} for s in segments}
 
-# Process Uploaded File
 if uploaded_file is not None:
     try:
         if uploaded_file.name.endswith('.csv'):
@@ -71,29 +66,23 @@ if uploaded_file is not None:
             
         for _, row in df.iterrows():
             seg_name = str(row.get('Segment', '')).strip()
-            # Try to match the segment name case-insensitively
             for s in segments:
                 if seg_name.lower() == s.lower():
-                    form_data[s]["act"] = float(row.get('Actuals', 
-row.get('Actual', 0)))
+                    form_data[s]["act"] = float(row.get('Actuals', row.get('Actual', 0)))
                     form_data[s]["tar"] = float(row.get('Target', 1))
         st.success("File loaded successfully!")
     except Exception as e:
         st.error(f"Error reading file: {e}")
 
-# Build the form rows
 for s in segments:
     col_a, col_b, col_c = st.columns(3)
     col_a.write(s)
-    act = col_b.number_input(f"Act {s}", value=float(form_data[s]["act"]), 
-step=1000.0, label_visibility="collapsed")
-    tar = col_c.number_input(f"Tar {s}", value=float(form_data[s]["tar"]), 
-step=1000.0, label_visibility="collapsed")
+    act = col_b.number_input(f"Act {s}", value=float(form_data[s]["act"]), step=1000.0, label_visibility="collapsed")
+    tar = col_c.number_input(f"Tar {s}", value=float(form_data[s]["tar"]), step=1000.0, label_visibility="collapsed")
     entries.append({"name": s, "act": act, "tar": tar})
 
 # --- CALCULATION ---
-if st.button("RUN FORENSIC COMPARISON", type="primary", 
-use_container_width=True):
+if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True):
     try:
         mid = Decimal(str(midpoint_input).replace(',', ''))
         ta = sum(Decimal(str(e["act"])) for e in entries)
@@ -103,13 +92,11 @@ use_container_width=True):
         m = get_mult(rev_ach)
         m_pay = (mid * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
         
-        applied = run_scenario(entries, mid, STATEMENT_W, m_pay, 
-'absorbed')
+        applied = run_scenario(entries, mid, STATEMENT_W, m_pay, 'absorbed')
         policy = run_scenario(entries, mid, POLICY_W, m_pay, 'additive')
         
         st.header(f"SABC APPLIED PAYOUT: R {applied['tot']:,.2f}")
         
-        # Output Texts
         audit1 = f"--- SCENARIO 1: SABC APPLIED CALCULATION ---\n"
         audit1 += f"Weights Applied: 45/24/6 | Total Ach: {rev_ach}% | Mult: {m}x\n"
         audit1 += f"{'STREAM':<25} {'% ACH':>8} {'SABC PAID':>14}\n" + "-"*50 + "\n"
@@ -131,11 +118,29 @@ use_container_width=True):
         adv += f"2. POLICY DICTATED DUE:  R {policy['tot']:,.2f}\n" + "-"*40 + "\n"
         adv += f"TOTAL SHORTFALL OWED:    R {shortfall:,.2f}\n"
 
+        # Display on screen
         col_out1, col_out2 = st.columns(2)
         with col_out1:
             st.code(audit1 + "\n\n" + audit2, language="text")
         with col_out2:
             st.code(adv, language="text")
+            
+        # PDF Generation
+        full_report = audit1 + "\n\n" + audit2 + "\n\n" + adv
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Courier", size=9)
+        pdf.multi_cell(0, 5, full_report.encode('latin-1', 'replace').decode('latin-1'))
+        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        
+        # Download Button
+        st.download_button(
+            label="📄 Download PDF Audit Report",
+            data=pdf_bytes,
+            file_name="BEMAWU_Forensic_Audit.pdf",
+            mime="application/pdf",
+            type="primary"
+        )
             
     except Exception as e:
         st.error(f"Calculation Error: Check inputs. Details: {e}")
