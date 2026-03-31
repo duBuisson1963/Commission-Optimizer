@@ -66,7 +66,8 @@ with col2:
 
 segments = ["Digital", "Radio Classic", "Radio Sponsorship", "Radio Sport Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship"] 
 entries = [] 
-st.subheader("Manual Entry / Verification") cols = st.columns(3)
+st.subheader("Manual Entry / Verification") 
+cols = st.columns(3)
 cols[0].write("**Segment Name**")
 cols[1].write("**Actual Revenue**")
 cols[2].write("**Target Revenue**")
