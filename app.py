@@ -115,12 +115,13 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         m_pay_curr = (mid_curr * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
         
         # Scenario Runs
-        applied = run_scenario(entries, mid_manual, STATEMENT_W, m_pay_manual, 'absorbed')
-        policy_man = run_scenario(entries, mid_manual, POLICY_W, m_pay_manual, 'additive')
-        policy_2021 = run_scenario(entries, mid_2021, POLICY_W, m_pay_2021, 'additive')
-        policy_curr = run_scenario(entries, mid_curr, POLICY_W, m_pay_curr, 'additive')
+        applied_manual = run_scenario(entries, mid_manual, STATEMENT_W, m_pay_manual, 'absorbed')
+        applied_curr   = run_scenario(entries, mid_curr, STATEMENT_W, m_pay_curr, 'absorbed')
+        policy_manual  = run_scenario(entries, mid_manual, POLICY_W, m_pay_manual, 'additive')
+        policy_2021    = run_scenario(entries, mid_2021, POLICY_W, m_pay_2021, 'additive')
+        policy_curr    = run_scenario(entries, mid_curr, POLICY_W, m_pay_curr, 'additive')
         
-        st.header(f"SABC APPLIED PAYOUT (Manual Midpoint): R {applied['tot']:,.2f}")
+        st.header(f"SABC APPLIED PAYOUT (Manual Midpoint): R {applied_manual['tot']:,.2f}")
         
         # --- GENERATE STRINGS ---
         def build_audit_block(title, mid_val, mid_label, weights, lines, m_pay, tot, label_tot):
@@ -134,40 +135,45 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
             return b
 
         audit1 = build_audit_block(
-            "SCENARIO 1: SABC APPLIED CALCULATION", mid_manual, "(Manual Entry)", "45/24/6", 
-            applied["lines"], m_pay_manual, applied["tot"], "FINAL SABC PAYOUT (Absorbed):"
+            "SCENARIO 1: SABC APPLIED (MANUAL MIDPOINT)", mid_manual, "(Manual Entry)", "45/24/6", 
+            applied_manual["lines"], m_pay_manual, applied_manual["tot"], "FINAL SABC PAYOUT (Absorbed):"
         )
         audit2 = build_audit_block(
-            "SCENARIO 2: POLICY DICTATED CALCULATION", mid_manual, "(Manual Entry)", "40/30/10", 
-            policy_man["lines"], m_pay_manual, policy_man["tot"], "FINAL POLICY DUE (Additive):"
+            "SCENARIO 2: SABC APPLIED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", "45/24/6", 
+            applied_curr["lines"], m_pay_curr, applied_curr["tot"], "FINAL SABC PAYOUT (Absorbed):"
         )
         audit3 = build_audit_block(
-            "SCENARIO 3: POLICY DICTATED (2021 SCALES)", mid_2021, f"(Scale {scale_2021} / 12)", "40/30/10", 
-            policy_2021["lines"], m_pay_2021, policy_2021["tot"], "FINAL POLICY DUE (Additive):"
+            "SCENARIO 3: POLICY DICTATED (MANUAL MIDPOINT)", mid_manual, "(Manual Entry)", "40/30/10", 
+            policy_manual["lines"], m_pay_manual, policy_manual["tot"], "FINAL POLICY DUE (Additive):"
         )
         audit4 = build_audit_block(
-            "SCENARIO 4: POLICY DICTATED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", "40/30/10", 
+            "SCENARIO 4: POLICY DICTATED (2021 SCALES)", mid_2021, f"(Scale {scale_2021} / 12)", "40/30/10", 
+            policy_2021["lines"], m_pay_2021, policy_2021["tot"], "FINAL POLICY DUE (Additive):"
+        )
+        audit5 = build_audit_block(
+            "SCENARIO 5: POLICY DICTATED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", "40/30/10", 
             policy_curr["lines"], m_pay_curr, policy_curr["tot"], "FINAL POLICY DUE (Additive):"
         )
 
         adv = "--- FORENSIC DISCREPANCY SUMMARY ---\n\n"
-        adv += f"1. SABC APPLIED PAYOUT (Manual):         R {applied['tot']:>12,.2f}\n"
-        adv += f"2. POLICY DICTATED DUE (Manual):         R {policy_man['tot']:>12,.2f}\n"
-        adv += f"3. POLICY DUE @ 2021 (Scale {scale_2021:<4}):      R {policy_2021['tot']:>12,.2f}\n"
-        adv += f"4. POLICY DUE @ Current (Scale {scale_current:<4}):   R {policy_curr['tot']:>12,.2f}\n"
+        adv += f"1. SABC APPLIED (Manual):                R {applied_manual['tot']:>12,.2f}\n"
+        adv += f"2. SABC APPLIED @ Current (Scale {scale_current:<4}):  R {applied_curr['tot']:>12,.2f}\n"
+        adv += f"3. POLICY DUE (Manual):                  R {policy_manual['tot']:>12,.2f}\n"
+        adv += f"4. POLICY DUE @ 2021 (Scale {scale_2021:<4}):      R {policy_2021['tot']:>12,.2f}\n"
+        adv += f"5. POLICY DUE @ Current (Scale {scale_current:<4}):   R {policy_curr['tot']:>12,.2f}\n"
         adv += "-"*56 + "\n"
-        adv += f"SHORTFALL 1 (Policy vs Applied):         R {(policy_man['tot'] - applied['tot']):>12,.2f}\n"
-        adv += f"SHORTFALL 2 (2021 vs Applied):           R {(policy_2021['tot'] - applied['tot']):>12,.2f}\n"
-        adv += f"SHORTFALL 3 (Current vs Applied):        R {(policy_curr['tot'] - applied['tot']):>12,.2f}\n"
+        adv += f"SHORTFALL A (Policy Manual vs SABC Manual):   R {(policy_manual['tot'] - applied_manual['tot']):>12,.2f}\n"
+        adv += f"SHORTFALL B (Policy Current vs SABC Current): R {(policy_curr['tot'] - applied_curr['tot']):>12,.2f}\n"
+        adv += f"ULTIMATE SHORTFALL (Policy Curr vs SABC Man): R {(policy_curr['tot'] - applied_manual['tot']):>12,.2f}\n"
 
         # --- DISPLAY ---
         col_out1, col_out2 = st.columns(2)
-        with col_out1: st.code(audit1 + "\n\n" + audit2, language="text")
-        with col_out2: st.code(audit3 + "\n\n" + audit4, language="text")
+        with col_out1: st.code(audit1 + "\n\n" + audit2 + "\n\n" + audit3, language="text")
+        with col_out2: st.code(audit4 + "\n\n" + audit5, language="text")
         st.code(adv, language="text")
             
         # --- PDF GENERATION ---
-        full_report = audit1 + "\n\n" + audit2 + "\n\n" + audit3 + "\n\n" + audit4 + "\n\n" + adv
+        full_report = audit1 + "\n\n" + audit2 + "\n\n" + audit3 + "\n\n" + audit4 + "\n\n" + audit5 + "\n\n" + adv
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Courier", size=8)
