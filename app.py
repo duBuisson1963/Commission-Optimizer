@@ -64,9 +64,7 @@ with col1:
 with col2:
     uploaded_file = st.file_uploader("Upload SABC Statement (CSV or Excel)", type=['csv', 'xlsx'])
 
-segments = ["Digital", "Radio Classic", "Radio Sponsorship", "Radio Sport Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship"] entries = []
-
-st.subheader("Manual Entry / Verification")
+segments = ["Digital", "Radio Classic", "Radio Sponsorship", "Radio Sport Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship"] entries = [] st.subheader("Manual Entry / Verification")
 cols = st.columns(3)
 cols[0].write("**Segment Name**")
 cols[1].write("**Actual Revenue**")
