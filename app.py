@@ -162,4 +162,34 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         adv += f"1. SABC APPLIED (Manual):                R {applied_manual['tot']:>12,.2f}\n"
         adv += f"2. SABC APPLIED @ Current (Scale {scale_current:<4}):  R {applied_curr['tot']:>12,.2f}\n"
         adv += f"3. POLICY DUE (Manual):                  R {policy_manual['tot']:>12,.2f}\n"
-        adv += f"
+        adv += f"4. POLICY DUE @ 2021 (Scale {scale_2021:<4}):      R {policy_2021['tot']:>12,.2f}\n"
+        adv += f"5. POLICY DUE @ Current (Scale {scale_current:<4}):   R {policy_curr['tot']:>12,.2f}\n"
+        adv += "-"*56 + "\n"
+        adv += f"SHORTFALL A (Policy Manual vs SABC Manual):   R {(policy_manual['tot'] - applied_manual['tot']):>12,.2f}\n"
+        adv += f"SHORTFALL B (Policy Current vs SABC Current): R {(policy_curr['tot'] - applied_curr['tot']):>12,.2f}\n"
+        adv += f"ULTIMATE SHORTFALL (Policy Curr vs SABC Man): R {(policy_curr['tot'] - applied_manual['tot']):>12,.2f}\n"
+
+        # --- DISPLAY ---
+        col_out1, col_out2 = st.columns(2)
+        with col_out1: st.code(audit1 + "\n\n" + audit2 + "\n\n" + audit3, language="text")
+        with col_out2: st.code(audit4 + "\n\n" + audit5, language="text")
+        st.code(adv, language="text")
+            
+        # --- PDF GENERATION ---
+        full_report = audit1 + "\n\n" + audit2 + "\n\n" + audit3 + "\n\n" + audit4 + "\n\n" + audit5 + "\n\n" + adv
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Courier", size=8)
+        pdf.multi_cell(0, 4, full_report.encode('latin-1', 'replace').decode('latin-1'))
+        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        
+        st.download_button(
+            label="📄 Download Full PDF Audit Report",
+            data=pdf_bytes,
+            file_name="BEMAWU_Comprehensive_Forensic_Audit.pdf",
+            mime="application/pdf",
+            type="primary"
+        )
+            
+    except Exception as e:
+        st.error(f"Calculation Error: Check inputs. Details: {e}")
