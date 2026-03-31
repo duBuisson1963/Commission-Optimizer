@@ -17,12 +17,14 @@ POLICY_W = {
 # --- SALARY SCALES (ANNUAL) ---
 MIDPOINTS_2021 = {
     '110A': 3310313, '110B': 2648250, '115A': 2118600, '115B': 1765500, '120': 1650000,
+    '125': 1175508, '130': 904237,
     '300': 459910, '401': 416379, '402': 327316, '403': 254447, 
     '404': 199286, '405': 153057, '406': 135132, '407': 100704, '408': 71634
 }
 
 MIDPOINTS_CURRENT = {
     '110A': 3459277, '110': 3182534, '110B': 2767421, '115': 2546028, '115A': 2213937, '115B': 1844948, '120': 1724250,
+    '125A': 1412667, '125': 1228406, '130A': 1091391, '130B': 1039420, '130': 944928,
     '300': 480606, '401': 435116, '402B': 394241, '402': 342045, 
     '403': 265897, '404': 208254, '405': 159945, '405A': 141872, '406B': 122336
 }
@@ -161,34 +163,4 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         adv += f"1. SABC APPLIED (Manual):                R {applied_manual['tot']:>12,.2f}\n"
         adv += f"2. SABC APPLIED @ Current (Scale {scale_current:<4}):  R {applied_curr['tot']:>12,.2f}\n"
         adv += f"3. POLICY DUE (Manual):                  R {policy_manual['tot']:>12,.2f}\n"
-        adv += f"4. POLICY DUE @ 2021 (Scale {scale_2021:<4}):      R {policy_2021['tot']:>12,.2f}\n"
-        adv += f"5. POLICY DUE @ Current (Scale {scale_current:<4}):   R {policy_curr['tot']:>12,.2f}\n"
-        adv += "-"*56 + "\n"
-        adv += f"SHORTFALL A (Policy Manual vs SABC Manual):   R {(policy_manual['tot'] - applied_manual['tot']):>12,.2f}\n"
-        adv += f"SHORTFALL B (Policy Current vs SABC Current): R {(policy_curr['tot'] - applied_curr['tot']):>12,.2f}\n"
-        adv += f"ULTIMATE SHORTFALL (Policy Curr vs SABC Man): R {(policy_curr['tot'] - applied_manual['tot']):>12,.2f}\n"
-
-        # --- DISPLAY ---
-        col_out1, col_out2 = st.columns(2)
-        with col_out1: st.code(audit1 + "\n\n" + audit2 + "\n\n" + audit3, language="text")
-        with col_out2: st.code(audit4 + "\n\n" + audit5, language="text")
-        st.code(adv, language="text")
-            
-        # --- PDF GENERATION ---
-        full_report = audit1 + "\n\n" + audit2 + "\n\n" + audit3 + "\n\n" + audit4 + "\n\n" + audit5 + "\n\n" + adv
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Courier", size=8)
-        pdf.multi_cell(0, 4, full_report.encode('latin-1', 'replace').decode('latin-1'))
-        pdf_bytes = pdf.output(dest='S').encode('latin-1')
-        
-        st.download_button(
-            label="📄 Download Full PDF Audit Report",
-            data=pdf_bytes,
-            file_name="BEMAWU_Comprehensive_Forensic_Audit.pdf",
-            mime="application/pdf",
-            type="primary"
-        )
-            
-    except Exception as e:
-        st.error(f"Calculation Error: Check inputs. Details: {e}")
+        adv += f"
