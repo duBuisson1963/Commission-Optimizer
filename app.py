@@ -3,15 +3,32 @@ import pandas as pd
 from decimal import Decimal, ROUND_HALF_UP
 from fpdf import FPDF
 
-# --- BASELINE WEIGHTS (v10.35) ---
-STATEMENT_W = {
-    "Radio Classic": 45.0, "TV Classic": 24.0, "TV Sponsorship": 6.0,
-    "Radio Sponsorship": 15.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5
-}
-
-POLICY_W = {
-    "TV Classic": 40.0, "Radio Classic": 30.0, "TV Sponsorship": 10.0,
-    "Radio Sponsorship": 10.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5
+# --- PROFILE WEIGHTS ---
+PROFILES = {
+    "Standard AE / SMME": {
+        "statement": {
+            "Radio Classic": 45.0, "TV Classic": 24.0, "TV Sponsorship": 6.0,
+            "Radio Sponsorship": 15.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5
+        },
+        "policy": {
+            "TV Classic": 40.0, "Radio Classic": 30.0, "TV Sponsorship": 10.0,
+            "Radio Sponsorship": 10.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5
+        },
+        "display_stmt": "45/24/6",
+        "display_pol": "40/30/10"
+    },
+    "Sports PM": {
+        "statement": {
+            "Digital": 10.0, "Radio Sport Sponsorship": 30.0, "TV Sport Sponsorship": 60.0,
+            "Radio Classic": 0.0, "TV Classic": 0.0, "TV Sponsorship": 0.0, "Radio Sponsorship": 0.0
+        },
+        "policy": {
+            "Digital": 10.0, "Radio Sport Sponsorship": 30.0, "TV Sport Sponsorship": 60.0,
+            "Radio Classic": 0.0, "TV Classic": 0.0, "TV Sponsorship": 0.0, "Radio Sponsorship": 0.0
+        },
+        "display_stmt": "10/30/60",
+        "display_pol": "10/30/60"
+    }
 }
 
 # --- SALARY SCALES (ANNUAL) ---
@@ -55,6 +72,10 @@ st.set_page_config(page_title="BEMAWU Forensic Audit", layout="wide")
 st.title("BEMAWU Dual-Profile Forensic Simulator")
 
 # --- INPUTS ---
+# Add profile selector at the very top
+selected_profile = st.radio("Select AE Profile / Category:", ["Standard AE / SMME", "Sports PM"], horizontal=True)
+st.divider()
+
 col1, col2 = st.columns([1, 2])
 with col1:
     midpoint_input = st.text_input("Target Commission (Manual Midpoint):", value="27276.33")
@@ -64,9 +85,10 @@ with col1:
 with col2:
     uploaded_file = st.file_uploader("Upload SABC Statement (CSV or Excel)", type=['csv', 'xlsx'])
 
-segments = ["Digital", "Radio Classic", "Radio Sponsorship", "Radio Sport Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship"] 
-entries = [] 
-st.subheader("Manual Entry / Verification") 
+segments = ["Digital", "Radio Classic", "Radio Sponsorship", "Radio Sport Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship"]
+entries = []
+
+st.subheader("Manual Entry / Verification")
 cols = st.columns(3)
 cols[0].write("**Segment Name**")
 cols[1].write("**Actual Revenue**")
@@ -78,7 +100,7 @@ if uploaded_file is not None:
     try:
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file, encoding='latin-1')
-        else:
+else:
             df = pd.read_excel(uploaded_file)
             
         for _, row in df.iterrows():
@@ -101,6 +123,12 @@ for s in segments:
 # --- CALCULATION ---
 if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True):
     try:
+        # Get active weights based on selection
+        active_stmt_w = PROFILES[selected_profile]["statement"]
+        active_pol_w = PROFILES[selected_profile]["policy"]
+        str_stmt = PROFILES[selected_profile]["display_stmt"]
+        str_pol = PROFILES[selected_profile]["display_pol"]
+
         # Base Midpoints
         mid_manual = Decimal(str(midpoint_input).replace(',', ''))
         mid_2021 = (Decimal(str(MIDPOINTS_2021[scale_2021])) / 12).quantize(Decimal('0.01'), ROUND_HALF_UP)
@@ -117,18 +145,19 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         m_pay_2021 = (mid_2021 * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
         m_pay_curr = (mid_curr * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
         
-        # Scenario Runs
-        applied_manual = run_scenario(entries, mid_manual, STATEMENT_W, m_pay_manual, 'absorbed')
-        applied_curr   = run_scenario(entries, mid_curr, STATEMENT_W, m_pay_curr, 'absorbed')
-        policy_manual  = run_scenario(entries, mid_manual, POLICY_W, m_pay_manual, 'additive')
-        policy_2021    = run_scenario(entries, mid_2021, POLICY_W, m_pay_2021, 'additive')
-        policy_curr    = run_scenario(entries, mid_curr, POLICY_W, m_pay_curr, 'additive')
+        # Scenario Runs using dynamically selected weights
+        applied_manual = run_scenario(entries, mid_manual, active_stmt_w, m_pay_manual, 'absorbed')
+        applied_curr   = run_scenario(entries, mid_curr, active_stmt_w, m_pay_curr, 'absorbed')
+        policy_manual  = run_scenario(entries, mid_manual, active_pol_w, m_pay_manual, 'additive')
+        policy_2021    = run_scenario(entries, mid_2021, active_pol_w, m_pay_2021, 'additive')
+        policy_curr    = run_scenario(entries, mid_curr, active_pol_w, m_pay_curr, 'additive')
         
         st.header(f"SABC APPLIED PAYOUT (Manual Midpoint): R {applied_manual['tot']:,.2f}")
         
         # --- GENERATE STRINGS ---
         def build_audit_block(title, mid_val, mid_label, weights, lines, m_pay, tot, label_tot):
             b = f"--- {title} ---\n"
+            b += f"Profile: {selected_profile}\n"
             b += f"Midpoint Used: R {mid_val:,.2f} {mid_label}\n"
             b += f"Weights Applied: {weights} | Total Ach: {rev_ach}% | Mult: {m}x\n"
             b += f"{'STREAM':<25} {'% ACH':>8} {'PAYOUT DUE':>14}\n" + "-"*50 + "\n"
@@ -138,27 +167,28 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
             return b
 
         audit1 = build_audit_block(
-            "SCENARIO 1: SABC APPLIED (MANUAL MIDPOINT)", mid_manual, "(Manual Entry)", "45/24/6", 
+            "SCENARIO 1: SABC APPLIED (MANUAL MIDPOINT)", mid_manual, "(Manual Entry)", str_stmt, 
             applied_manual["lines"], m_pay_manual, applied_manual["tot"], "FINAL SABC PAYOUT (Absorbed):"
         )
         audit2 = build_audit_block(
-            "SCENARIO 2: SABC APPLIED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", "45/24/6", 
+            "SCENARIO 2: SABC APPLIED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", str_stmt, 
             applied_curr["lines"], m_pay_curr, applied_curr["tot"], "FINAL SABC PAYOUT (Absorbed):"
         )
         audit3 = build_audit_block(
-            "SCENARIO 3: POLICY DICTATED (MANUAL MIDPOINT)", mid_manual, "(Manual Entry)", "40/30/10", 
+            "SCENARIO 3: POLICY DICTATED (MANUAL MIDPOINT)", mid_manual, "(Manual Entry)", str_pol, 
             policy_manual["lines"], m_pay_manual, policy_manual["tot"], "FINAL POLICY DUE (Additive):"
         )
         audit4 = build_audit_block(
-            "SCENARIO 4: POLICY DICTATED (2021 SCALES)", mid_2021, f"(Scale {scale_2021} / 12)", "40/30/10", 
+            "SCENARIO 4: POLICY DICTATED (2021 SCALES)", mid_2021, f"(Scale {scale_2021} / 12)", str_pol, 
             policy_2021["lines"], m_pay_2021, policy_2021["tot"], "FINAL POLICY DUE (Additive):"
         )
         audit5 = build_audit_block(
-            "SCENARIO 5: POLICY DICTATED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", "40/30/10", 
+            "SCENARIO 5: POLICY DICTATED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", str_pol, 
             policy_curr["lines"], m_pay_curr, policy_curr["tot"], "FINAL POLICY DUE (Additive):"
         )
 
         adv = "--- FORENSIC DISCREPANCY SUMMARY ---\n\n"
+        adv += f"Profile Audited: {selected_profile}\n\n"
         adv += f"1. SABC APPLIED (Manual):                R {applied_manual['tot']:>12,.2f}\n"
         adv += f"2. SABC APPLIED @ Current (Scale {scale_current:<4}):  R {applied_curr['tot']:>12,.2f}\n"
         adv += f"3. POLICY DUE (Manual):                  R {policy_manual['tot']:>12,.2f}\n"
@@ -186,7 +216,7 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         st.download_button(
             label="📄 Download Full PDF Audit Report",
             data=pdf_bytes,
-            file_name="BEMAWU_Comprehensive_Forensic_Audit.pdf",
+            file_name=f"BEMAWU_Audit_{selected_profile.replace(' ', '_').replace('/', '')}.pdf",
             mime="application/pdf",
             type="primary"
         )
