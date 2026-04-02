@@ -103,7 +103,7 @@ if uploaded_file is not None:
     else:
             df = pd.read_excel(uploaded_file)
             
-        for _, row in df.iterrows():
+    for _, row in df.iterrows():
             seg_name = str(row.get('Segment', '')).strip()
             for s in segments:
                 if seg_name.lower() == s.lower():
