@@ -67,9 +67,8 @@ def run_scenario(entries, mid, w_map, m_pay, logic_type):
     total = max(sum_seg, m_pay) if logic_type == 'absorbed' else sum_seg + m_pay
     return {"lines": lines, "tot": total}
 
-# --- COPILOT LOGIC IMPLEMENTATION ---
-def run_copilot_logic(entries, target_commission):
-    # Extract values safely
+# --- COPILOT LOGIC IMPLEMENTATIONS ---
+def run_copilot_sports_logic(entries, target_commission):
     act_tv = next((Decimal(str(e["act"])) for e in entries if e["name"] == "TV Sport Sponsorship"), Decimal('0'))
     tar_tv = next((Decimal(str(e["tar"])) for e in entries if e["name"] == "TV Sport Sponsorship"), Decimal('1'))
     act_rad = next((Decimal(str(e["act"])) for e in entries if e["name"] == "Radio Sport Sponsorship"), Decimal('0'))
@@ -77,30 +76,20 @@ def run_copilot_logic(entries, target_commission):
     act_dig = next((Decimal(str(e["act"])) for e in entries if e["name"] == "Digital"), Decimal('0'))
     tar_dig = next((Decimal(str(e["tar"])) for e in entries if e["name"] == "Digital"), Decimal('1'))
 
-    # Step 1: Percentages
     pct_tv = (act_tv / tar_tv) * 100 if tar_tv > 0 else Decimal('0')
     pct_rad = (act_rad / tar_rad) * 100 if tar_rad > 0 else Decimal('0')
     pct_dig = (act_dig / tar_dig) * 100 if tar_dig > 0 else Decimal('0')
 
-    # Step 2: Achievements
-    ach_tv = pct_tv >= 100
-    ach_rad = pct_rad >= 100
-    ach_count = int(ach_tv) + int(ach_rad)
+    ach_count = int(pct_tv >= 100) + int(pct_rad >= 100)
 
-    # Mode Logic
     if ach_count == 0:
         return Decimal('0'), "MODE C (No Sport Targets Hit)", "0.00x", Decimal('0')
-    
     elif ach_count == 1:
-        if ach_tv:
-            payout = target_commission * Decimal('0.60')
-            return payout, "MODE B (TV Only Fallback)", "Fallback (60%)", pct_tv
+        if pct_tv >= 100:
+            return target_commission * Decimal('0.60'), "MODE B (TV Only Fallback)", "Fallback (60%)", pct_tv
         else:
-            payout = target_commission * Decimal('0.30')
-            return payout, "MODE B (Radio Only Fallback)", "Fallback (30%)", pct_rad
-            
+            return target_commission * Decimal('0.30'), "MODE B (Radio Only Fallback)", "Fallback (30%)", pct_rad
     else:
-        # Mode A: Both Achieved (Weighted with 180 cap)
         pct_tv_cap = min(pct_tv, Decimal('180'))
         pct_rad_cap = min(pct_rad, Decimal('180'))
         pct_dig_cap = min(pct_dig, Decimal('180'))
@@ -110,10 +99,39 @@ def run_copilot_logic(entries, target_commission):
         if weighted_pct < 100: mult = Decimal('0.00')
         elif weighted_pct <= 120: mult = Decimal('1.00')
         elif weighted_pct <= 150: mult = Decimal('2.10')
-        else: mult = Decimal('4.10') # Capped per Copilot
+        else: mult = Decimal('4.10')
         
-        payout = target_commission * mult
-        return payout, f"MODE A (Both Hit - {weighted_pct:.1f}% Weighted)", f"{mult}x", weighted_pct
+        return target_commission * mult, f"MODE A (Both Hit - {weighted_pct:.1f}% Weighted)", f"{mult}x", weighted_pct
+
+def run_copilot_smme_logic(entries, target_commission):
+    non_digital = ["Radio Classic", "Radio Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship", "Radio Sport Sponsorship"]
+    
+    tot_act_nd = sum(Decimal(str(e["act"])) for e in entries if e["name"] in non_digital)
+    tot_tar_nd = sum(Decimal(str(e["tar"])) for e in entries if e["name"] in non_digital)
+    
+    overall_pct = (tot_act_nd / tot_tar_nd) * 100 if tot_tar_nd > 0 else Decimal('0')
+    
+    cw = {
+        "Radio Classic": Decimal('0.45'), "Radio Sponsorship": Decimal('0.15'),
+        "TV Classic": Decimal('0.24'), "TV Sponsorship": Decimal('0.06'),
+        "TV Sport Sponsorship": Decimal('0.025'), "Radio Sport Sponsorship": Decimal('0.025'),
+        "Digital": Decimal('0.05')
+    }
+
+    if overall_pct < 100:
+        comm = Decimal('0')
+        for e in entries:
+            pct = (Decimal(str(e["act"])) / Decimal(str(e["tar"]))) * 100 if Decimal(str(e["tar"])) > 0 else Decimal('0')
+            if pct >= 100:
+                comm += target_commission * cw.get(e["name"], Decimal('0'))
+        return comm, f"Sub-100% (Excluded Digital | {overall_pct:.1f}%)", "No Multiplier", overall_pct
+    else:
+        if overall_pct <= 120: mult = Decimal('1.00')
+        elif overall_pct <= 150: mult = Decimal('2.10')
+        elif overall_pct <= 180: mult = Decimal('4.10')
+        else: mult = Decimal('6.20')
+        return target_commission * mult, f"Multiplier Triggered (Excluded Digital | {overall_pct:.1f}%)", f"{mult}x", overall_pct
+
 
 # --- UI SETUP ---
 st.set_page_config(page_title="BEMAWU Forensic Audit", layout="wide")
@@ -212,16 +230,19 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         audit4 = build_audit_block("SCENARIO 4: POLICY DICTATED (2021 SCALES)", mid_2021, f"(Scale {scale_2021} / 12)", str_pol, policy_2021["lines"], m_pay_2021, policy_2021["tot"], "FINAL POLICY DUE (Additive):")
         audit5 = build_audit_block("SCENARIO 5: POLICY DICTATED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", str_pol, policy_curr["lines"], m_pay_curr, policy_curr["tot"], "FINAL POLICY DUE (Additive):")
 
-        # COPILOT SCENARIO (ONLY FOR SPORTS PM)
-        audit6 = ""
-        copilot_tot = Decimal('0')
+        # COPILOT SCENARIO
         if selected_profile == "Sports PM":
-            copilot_tot, c_mode, c_mult, c_ach = run_copilot_logic(entries, mid_manual)
-            audit6 = f"--- SCENARIO 6: COPILOT SUGGESTED LOGIC (SPORTS PM ONLY) ---\n"
-            audit6 += f"Logic Rule: {c_mode}\n"
-            audit6 += f"Capped Multiplier Applied: {c_mult}\n"
-            audit6 += "-"*50 + "\n"
-            audit6 += f"FINAL COPILOT PAYOUT (Manual Midpoint): R {copilot_tot:>12,.2f}\n\n"
+            copilot_tot, c_mode, c_mult, c_ach = run_copilot_sports_logic(entries, mid_manual)
+            title = "SCENARIO 6: COPILOT SUGGESTED LOGIC (SPORTS PM)"
+        else:
+            copilot_tot, c_mode, c_mult, c_ach = run_copilot_smme_logic(entries, mid_manual)
+            title = "SCENARIO 6: COPILOT SUGGESTED LOGIC (SMME / STANDARD AE)"
+            
+        audit6 = f"--- {title} ---\n"
+        audit6 += f"Logic Rule: {c_mode}\n"
+        audit6 += f"Multiplier Applied: {c_mult}\n"
+        audit6 += "-"*50 + "\n"
+        audit6 += f"FINAL COPILOT PAYOUT (Manual Midpoint): R {copilot_tot:>12,.2f}\n\n"
 
         adv = "--- FORENSIC DISCREPANCY SUMMARY ---\n\n"
         adv += f"Profile Audited: {selected_profile}\n\n"
@@ -230,8 +251,7 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         adv += f"3. POLICY DUE (Manual):                  R {policy_manual['tot']:>12,.2f}\n"
         adv += f"4. POLICY DUE @ 2021 (Scale {scale_2021:<4}):      R {policy_2021['tot']:>12,.2f}\n"
         adv += f"5. POLICY DUE @ Current (Scale {scale_current:<4}):   R {policy_curr['tot']:>12,.2f}\n"
-        if selected_profile == "Sports PM":
-            adv += f"6. COPILOT SUGGESTED LOGIC:              R {copilot_tot:>12,.2f}\n"
+        adv += f"6. COPILOT SUGGESTED LOGIC:              R {copilot_tot:>12,.2f}\n"
         adv += "-"*56 + "\n"
         adv += f"SHORTFALL A (Policy Manual vs SABC Manual):   R {(policy_manual['tot'] - applied_manual['tot']):>12,.2f}\n"
         adv += f"SHORTFALL B (Policy Current vs SABC Current): R {(policy_curr['tot'] - applied_curr['tot']):>12,.2f}\n"
@@ -241,10 +261,10 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         with col_out1: 
             st.code(audit1 + "\n\n" + audit2 + "\n\n" + audit3, language="text")
         with col_out2: 
-            st.code(audit4 + "\n\n" + audit5 + ("\n\n" + audit6 if audit6 else ""), language="text")
+            st.code(audit4 + "\n\n" + audit5 + "\n\n" + audit6, language="text")
         st.code(adv, language="text")
             
-        full_report = audit1 + "\n\n" + audit2 + "\n\n" + audit3 + "\n\n" + audit4 + "\n\n" + audit5 + ("\n\n" + audit6 if audit6 else "") + "\n\n" + adv
+        full_report = audit1 + "\n\n" + audit2 + "\n\n" + audit3 + "\n\n" + audit4 + "\n\n" + audit5 + "\n\n" + audit6 + "\n\n" + adv
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Courier", size=8)
