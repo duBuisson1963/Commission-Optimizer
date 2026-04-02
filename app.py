@@ -67,12 +67,58 @@ def run_scenario(entries, mid, w_map, m_pay, logic_type):
     total = max(sum_seg, m_pay) if logic_type == 'absorbed' else sum_seg + m_pay
     return {"lines": lines, "tot": total}
 
+# --- COPILOT LOGIC IMPLEMENTATION ---
+def run_copilot_logic(entries, target_commission):
+    # Extract values safely
+    act_tv = next((Decimal(str(e["act"])) for e in entries if e["name"] == "TV Sport Sponsorship"), Decimal('0'))
+    tar_tv = next((Decimal(str(e["tar"])) for e in entries if e["name"] == "TV Sport Sponsorship"), Decimal('1'))
+    act_rad = next((Decimal(str(e["act"])) for e in entries if e["name"] == "Radio Sport Sponsorship"), Decimal('0'))
+    tar_rad = next((Decimal(str(e["tar"])) for e in entries if e["name"] == "Radio Sport Sponsorship"), Decimal('1'))
+    act_dig = next((Decimal(str(e["act"])) for e in entries if e["name"] == "Digital"), Decimal('0'))
+    tar_dig = next((Decimal(str(e["tar"])) for e in entries if e["name"] == "Digital"), Decimal('1'))
+
+    # Step 1: Percentages
+    pct_tv = (act_tv / tar_tv) * 100 if tar_tv > 0 else Decimal('0')
+    pct_rad = (act_rad / tar_rad) * 100 if tar_rad > 0 else Decimal('0')
+    pct_dig = (act_dig / tar_dig) * 100 if tar_dig > 0 else Decimal('0')
+
+    # Step 2: Achievements
+    ach_tv = pct_tv >= 100
+    ach_rad = pct_rad >= 100
+    ach_count = int(ach_tv) + int(ach_rad)
+
+    # Mode Logic
+    if ach_count == 0:
+        return Decimal('0'), "MODE C (No Sport Targets Hit)", "0.00x", Decimal('0')
+    
+    elif ach_count == 1:
+        if ach_tv:
+            payout = target_commission * Decimal('0.60')
+            return payout, "MODE B (TV Only Fallback)", "Fallback (60%)", pct_tv
+        else:
+            payout = target_commission * Decimal('0.30')
+            return payout, "MODE B (Radio Only Fallback)", "Fallback (30%)", pct_rad
+            
+    else:
+        # Mode A: Both Achieved (Weighted with 180 cap)
+        pct_tv_cap = min(pct_tv, Decimal('180'))
+        pct_rad_cap = min(pct_rad, Decimal('180'))
+        pct_dig_cap = min(pct_dig, Decimal('180'))
+        
+        weighted_pct = (Decimal('0.60') * pct_tv_cap) + (Decimal('0.30') * pct_rad_cap) + (Decimal('0.10') * pct_dig_cap)
+        
+        if weighted_pct < 100: mult = Decimal('0.00')
+        elif weighted_pct <= 120: mult = Decimal('1.00')
+        elif weighted_pct <= 150: mult = Decimal('2.10')
+        else: mult = Decimal('4.10') # Capped per Copilot
+        
+        payout = target_commission * mult
+        return payout, f"MODE A (Both Hit - {weighted_pct:.1f}% Weighted)", f"{mult}x", weighted_pct
+
 # --- UI SETUP ---
 st.set_page_config(page_title="BEMAWU Forensic Audit", layout="wide")
 st.title("BEMAWU Dual-Profile Forensic Simulator")
 
-# --- INPUTS ---
-# Add profile selector at the very top
 selected_profile = st.radio("Select AE Profile / Category:", ["Standard AE / SMME", "Sports PM"], horizontal=True)
 st.divider()
 
@@ -123,29 +169,24 @@ for s in segments:
 # --- CALCULATION ---
 if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True):
     try:
-        # Get active weights based on selection
         active_stmt_w = PROFILES[selected_profile]["statement"]
         active_pol_w = PROFILES[selected_profile]["policy"]
         str_stmt = PROFILES[selected_profile]["display_stmt"]
         str_pol = PROFILES[selected_profile]["display_pol"]
 
-        # Base Midpoints
         mid_manual = Decimal(str(midpoint_input).replace(',', ''))
         mid_2021 = (Decimal(str(MIDPOINTS_2021[scale_2021])) / 12).quantize(Decimal('0.01'), ROUND_HALF_UP)
         mid_curr = (Decimal(str(MIDPOINTS_CURRENT[scale_current])) / 12).quantize(Decimal('0.01'), ROUND_HALF_UP)
         
-        # Achievement & Multiplier
         ta = sum(Decimal(str(e["act"])) for e in entries)
         tt = sum(Decimal(str(e["tar"])) for e in entries)
         rev_ach = (ta / tt * 100).quantize(Decimal('0.01')) if tt > 0 else Decimal('0')
         m = get_mult(rev_ach)
         
-        # Multiplier Payouts based on midpoints
         m_pay_manual = (mid_manual * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
         m_pay_2021 = (mid_2021 * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
         m_pay_curr = (mid_curr * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
         
-        # Scenario Runs using dynamically selected weights
         applied_manual = run_scenario(entries, mid_manual, active_stmt_w, m_pay_manual, 'absorbed')
         applied_curr   = run_scenario(entries, mid_curr, active_stmt_w, m_pay_curr, 'absorbed')
         policy_manual  = run_scenario(entries, mid_manual, active_pol_w, m_pay_manual, 'additive')
@@ -154,7 +195,6 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         
         st.header(f"SABC APPLIED PAYOUT (Manual Midpoint): R {applied_manual['tot']:,.2f}")
         
-        # --- GENERATE STRINGS ---
         def build_audit_block(title, mid_val, mid_label, weights, lines, m_pay, tot, label_tot):
             b = f"--- {title} ---\n"
             b += f"Profile: {selected_profile}\n"
@@ -166,26 +206,22 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
             b += f"{label_tot:<35} R {tot:>12,.2f}\n"
             return b
 
-        audit1 = build_audit_block(
-            "SCENARIO 1: SABC APPLIED (MANUAL MIDPOINT)", mid_manual, "(Manual Entry)", str_stmt, 
-            applied_manual["lines"], m_pay_manual, applied_manual["tot"], "FINAL SABC PAYOUT (Absorbed):"
-        )
-        audit2 = build_audit_block(
-            "SCENARIO 2: SABC APPLIED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", str_stmt, 
-            applied_curr["lines"], m_pay_curr, applied_curr["tot"], "FINAL SABC PAYOUT (Absorbed):"
-        )
-        audit3 = build_audit_block(
-            "SCENARIO 3: POLICY DICTATED (MANUAL MIDPOINT)", mid_manual, "(Manual Entry)", str_pol, 
-            policy_manual["lines"], m_pay_manual, policy_manual["tot"], "FINAL POLICY DUE (Additive):"
-        )
-        audit4 = build_audit_block(
-            "SCENARIO 4: POLICY DICTATED (2021 SCALES)", mid_2021, f"(Scale {scale_2021} / 12)", str_pol, 
-            policy_2021["lines"], m_pay_2021, policy_2021["tot"], "FINAL POLICY DUE (Additive):"
-        )
-        audit5 = build_audit_block(
-            "SCENARIO 5: POLICY DICTATED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", str_pol, 
-            policy_curr["lines"], m_pay_curr, policy_curr["tot"], "FINAL POLICY DUE (Additive):"
-        )
+        audit1 = build_audit_block("SCENARIO 1: SABC APPLIED (MANUAL MIDPOINT)", mid_manual, "(Manual Entry)", str_stmt, applied_manual["lines"], m_pay_manual, applied_manual["tot"], "FINAL SABC PAYOUT (Absorbed):")
+        audit2 = build_audit_block("SCENARIO 2: SABC APPLIED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", str_stmt, applied_curr["lines"], m_pay_curr, applied_curr["tot"], "FINAL SABC PAYOUT (Absorbed):")
+        audit3 = build_audit_block("SCENARIO 3: POLICY DICTATED (MANUAL MIDPOINT)", mid_manual, "(Manual Entry)", str_pol, policy_manual["lines"], m_pay_manual, policy_manual["tot"], "FINAL POLICY DUE (Additive):")
+        audit4 = build_audit_block("SCENARIO 4: POLICY DICTATED (2021 SCALES)", mid_2021, f"(Scale {scale_2021} / 12)", str_pol, policy_2021["lines"], m_pay_2021, policy_2021["tot"], "FINAL POLICY DUE (Additive):")
+        audit5 = build_audit_block("SCENARIO 5: POLICY DICTATED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", str_pol, policy_curr["lines"], m_pay_curr, policy_curr["tot"], "FINAL POLICY DUE (Additive):")
+
+        # COPILOT SCENARIO (ONLY FOR SPORTS PM)
+        audit6 = ""
+        copilot_tot = Decimal('0')
+        if selected_profile == "Sports PM":
+            copilot_tot, c_mode, c_mult, c_ach = run_copilot_logic(entries, mid_manual)
+            audit6 = f"--- SCENARIO 6: COPILOT SUGGESTED LOGIC (SPORTS PM ONLY) ---\n"
+            audit6 += f"Logic Rule: {c_mode}\n"
+            audit6 += f"Capped Multiplier Applied: {c_mult}\n"
+            audit6 += "-"*50 + "\n"
+            audit6 += f"FINAL COPILOT PAYOUT (Manual Midpoint): R {copilot_tot:>12,.2f}\n\n"
 
         adv = "--- FORENSIC DISCREPANCY SUMMARY ---\n\n"
         adv += f"Profile Audited: {selected_profile}\n\n"
@@ -194,19 +230,21 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         adv += f"3. POLICY DUE (Manual):                  R {policy_manual['tot']:>12,.2f}\n"
         adv += f"4. POLICY DUE @ 2021 (Scale {scale_2021:<4}):      R {policy_2021['tot']:>12,.2f}\n"
         adv += f"5. POLICY DUE @ Current (Scale {scale_current:<4}):   R {policy_curr['tot']:>12,.2f}\n"
+        if selected_profile == "Sports PM":
+            adv += f"6. COPILOT SUGGESTED LOGIC:              R {copilot_tot:>12,.2f}\n"
         adv += "-"*56 + "\n"
         adv += f"SHORTFALL A (Policy Manual vs SABC Manual):   R {(policy_manual['tot'] - applied_manual['tot']):>12,.2f}\n"
         adv += f"SHORTFALL B (Policy Current vs SABC Current): R {(policy_curr['tot'] - applied_curr['tot']):>12,.2f}\n"
         adv += f"ULTIMATE SHORTFALL (Policy Curr vs SABC Man): R {(policy_curr['tot'] - applied_manual['tot']):>12,.2f}\n"
 
-        # --- DISPLAY ---
         col_out1, col_out2 = st.columns(2)
-        with col_out1: st.code(audit1 + "\n\n" + audit2 + "\n\n" + audit3, language="text")
-        with col_out2: st.code(audit4 + "\n\n" + audit5, language="text")
+        with col_out1: 
+            st.code(audit1 + "\n\n" + audit2 + "\n\n" + audit3, language="text")
+        with col_out2: 
+            st.code(audit4 + "\n\n" + audit5 + ("\n\n" + audit6 if audit6 else ""), language="text")
         st.code(adv, language="text")
             
-        # --- PDF GENERATION ---
-        full_report = audit1 + "\n\n" + audit2 + "\n\n" + audit3 + "\n\n" + audit4 + "\n\n" + audit5 + "\n\n" + adv
+        full_report = audit1 + "\n\n" + audit2 + "\n\n" + audit3 + "\n\n" + audit4 + "\n\n" + audit5 + ("\n\n" + audit6 if audit6 else "") + "\n\n" + adv
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Courier", size=8)
