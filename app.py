@@ -100,10 +100,10 @@ if uploaded_file is not None:
     try:
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file, encoding='latin-1')
-    else:
+        else:
             df = pd.read_excel(uploaded_file)
             
-    for _, row in df.iterrows():
+        for _, row in df.iterrows():
             seg_name = str(row.get('Segment', '')).strip()
             for s in segments:
                 if seg_name.lower() == s.lower():
