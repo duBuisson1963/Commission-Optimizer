@@ -134,21 +134,29 @@ def run_alternative_smme_logic(entries, target_commission):
         else: mult = Decimal('6.20')
         return target_commission * mult, f"Multiplier Triggered (Excluded Digital | {overall_pct:.1f}%)", f"{mult}x", lines
 
-# --- UI SETUP ---
+
+# --- UI SETUP & STATE MANAGEMENT ---
 st.set_page_config(page_title="BEMAWU Forensic Audit", layout="wide")
 st.title("BEMAWU Dual-Profile Forensic Simulator")
 
-selected_profile = st.radio("Select AE Profile / Category:", ["Standard AE / SMME", "Sports PM"], horizontal=True)
-st.divider()
+# Init persistent inputs
+if "midpoint_input_val" not in st.session_state: st.session_state["midpoint_input_val"] = "27276.33"
+if "sabc_target_default" not in st.session_state: st.session_state["sabc_target_default"] = "7917181.70"
+if "header_info" not in st.session_state: st.session_state["header_info"] = ""
 
-# Defaults
-midpoint_input_val = "27276.33"
-sabc_target_default = "7917181.70"
-header_info = ""
 segments = ["Digital", "Radio Classic", "Radio Sponsorship", "Radio Sport Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship"]
-form_data = {s: {"act": 0.0, "tar": 1.0} for s in segments}
 
-# Bulletproof number parser (handles SABC's comma typos)
+# Init persistent actual/target memory
+for s in segments:
+    if f"act_{s}" not in st.session_state: st.session_state[f"act_{s}"] = 0.0
+    if f"tar_{s}" not in st.session_state: st.session_state[f"tar_{s}"] = 1.0
+
+# Logic to swap target to actual and zero out actual
+def swap_act_tar(seg):
+    st.session_state[f"tar_{seg}"] = st.session_state[f"act_{seg}"]
+    st.session_state[f"act_{seg}"] = 0.0
+
+# Bulletproof number parser
 def parse_sabc_number(num_str):
     if not num_str: return 0.0
     num_str = num_str.strip()
@@ -163,99 +171,98 @@ def parse_sabc_number(num_str):
     val = float(final_str) if final_str else 0.0
     return -val if is_negative else val
 
+selected_profile = st.radio("Select AE Profile / Category:", ["Standard AE / SMME", "Sports PM"], horizontal=True)
+st.divider()
+
 # --- DATA UPLOAD & FORENSIC PARSING ---
 uploaded_file = st.file_uploader("Upload SABC Statement (PDF, CSV, Excel)", type=['pdf', 'csv', 'xlsx'])
 
 if uploaded_file is not None:
-    try:
-        file_bytes = uploaded_file.read()
-        pdf_text = ""
-        
-        if uploaded_file.name.lower().endswith('.pdf'):
-            try:
-                reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
-                for page in reader.pages:
-                    pdf_text += page.extract_text() + "\n"
-            except Exception:
-                pass # If PyPDF2 crashes, we catch the CSV-in-PDF below
+    file_hash = hash(uploaded_file.getvalue())
+    # Only parse if it's a NEW file upload
+    if st.session_state.get("last_file_hash") != file_hash:
+        st.session_state["last_file_hash"] = file_hash
+        try:
+            file_bytes = uploaded_file.getvalue()
+            pdf_text = ""
             
-            # If PyPDF2 extracted nothing (or crashed), violently decode the raw file bytes
-            if len(pdf_text.strip()) < 50:
+            if uploaded_file.name.lower().endswith('.pdf'):
                 try:
-                    pdf_text = file_bytes.decode('utf-8')
+                    reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+                    for page in reader.pages:
+                        pdf_text += page.extract_text() + "\n"
                 except Exception:
-                    pdf_text = file_bytes.decode('latin-1', errors='ignore')
-                    
-            # Normalize SAP's messy text format
-            norm_text = pdf_text.replace('"', '')
-            norm_text = re.sub(r'\s+', ' ', norm_text)
-            
-            # Extract Header Info
-            date_match = re.search(r"Commission Statement for\s+([A-Za-z]+\s+\d{4})", norm_text, re.IGNORECASE)
-            pers_match = re.search(r"Personnel Number:\s*(\d+\s+[A-Za-z\s]+?)\s*(?:Position|Target)", norm_text, re.IGNORECASE)
-            tc_match = re.search(r"Target Commission:[^\d]*?([\d\.,]+\.\d{2})", norm_text, re.IGNORECASE)
+                    pass
+                
+                if len(pdf_text.strip()) < 50:
+                    try: pdf_text = file_bytes.decode('utf-8')
+                    except Exception: pdf_text = file_bytes.decode('latin-1', errors='ignore')
+                        
+                norm_text = pdf_text.replace('"', '')
+                norm_text = re.sub(r'\s+', ' ', norm_text)
+                
+                date_match = re.search(r"Commission Statement for\s+([A-Za-z]+\s+\d{4})", norm_text, re.IGNORECASE)
+                pers_match = re.search(r"Personnel Number:\s*(\d+\s+[A-Za-z\s]+?)\s*(?:Position|Target)", norm_text, re.IGNORECASE)
+                tc_match = re.search(r"Target Commission:[^\d]*?([\d\.,]+\.\d{2})", norm_text, re.IGNORECASE)
 
-            h_date = date_match.group(1).strip() if date_match else "Unknown Date"
-            h_pers = pers_match.group(1).strip() if pers_match else "Unknown Personnel"
-            
-            if h_date != "Unknown Date" or h_pers != "Unknown Personnel":
-                header_info = f"Statement: {h_date} | Personnel: {h_pers}"
-            
-            if tc_match:
-                midpoint_input_val = f"{parse_sabc_number(tc_match.group(1)):.2f}"
+                h_date = date_match.group(1).strip() if date_match else "Unknown Date"
+                h_pers = pers_match.group(1).strip() if pers_match else "Unknown Personnel"
+                if h_date != "Unknown Date" or h_pers != "Unknown Personnel":
+                    st.session_state["header_info"] = f"Statement: {h_date} | Personnel: {h_pers}"
+                
+                if tc_match:
+                    st.session_state["midpoint_input_val"] = f"{parse_sabc_number(tc_match.group(1)):.2f}"
 
-            # Extract Segment Data using Armor-Piercing Regex
-            for s in segments:
-                # Allows for typos like "Radio Sponsorships"
-                s_regex = s.replace(' ', r'\s*') + r"s?"
-                # Skips empty columns and strictly captures the two numbers ending in .XX
-                pattern = rf"{s_regex}[^\d]*?(-?\d[\d\.,]*\.\d{{2}})[^\d]*?(-?\d[\d\.,]*\.\d{{2}})"
-                match = re.search(pattern, norm_text, re.IGNORECASE)
-                if match:
-                    form_data[s]["act"] = parse_sabc_number(match.group(1))
-                    form_data[s]["tar"] = parse_sabc_number(match.group(2))
-
-            # Extract SABC's Manipulated Target from the bottom
-            mult_match = re.search(r"Multiplier Commission[^\d]*?(-?\d[\d\.,]*\.\d{2})[^\d]*?(-?\d[\d\.,]*\.\d{2})", norm_text, re.IGNORECASE)
-            if mult_match:
-                sabc_target_default = f"{parse_sabc_number(mult_match.group(2)):.2f}"
-
-            st.success("File parsed successfully! Please verify the extracted numbers below.")
-
-        elif uploaded_file.name.lower().endswith('.csv'):
-            df = pd.read_csv(io.BytesIO(file_bytes), encoding='latin-1')
-            for _, row in df.iterrows():
-                seg_name = str(row.get('Segment', '')).strip()
                 for s in segments:
-                    if seg_name.lower() == s.lower() or seg_name.lower() == s.lower() + "s":
-                        form_data[s]["act"] = float(row.get('Actuals', row.get('Actual', 0)))
-                        form_data[s]["tar"] = float(row.get('Target', 1))
-            header_info = f"Data imported from CSV: {uploaded_file.name}"
-            st.success("CSV loaded successfully!")
-            
-    except Exception as e:
-        st.error(f"Error reading file: {e}. Please enter numbers manually.")
+                    s_regex = s.replace(' ', r'\s*') + r"s?"
+                    pattern = rf"{s_regex}[^\d]*?(-?\d[\d\.,]*\.\d{{2}})[^\d]*?(-?\d[\d\.,]*\.\d{{2}})"
+                    match = re.search(pattern, norm_text, re.IGNORECASE)
+                    if match:
+                        st.session_state[f"act_{s}"] = parse_sabc_number(match.group(1))
+                        st.session_state[f"tar_{s}"] = parse_sabc_number(match.group(2))
+
+                mult_match = re.search(r"Multiplier Commission[^\d]*?(-?\d[\d\.,]*\.\d{2})[^\d]*?(-?\d[\d\.,]*\.\d{2})", norm_text, re.IGNORECASE)
+                if mult_match:
+                    st.session_state["sabc_target_default"] = f"{parse_sabc_number(mult_match.group(2)):.2f}"
+
+                st.success("File parsed successfully! Review empty targets below.")
+
+            elif uploaded_file.name.lower().endswith('.csv'):
+                df = pd.read_csv(io.BytesIO(file_bytes), encoding='latin-1')
+                for _, row in df.iterrows():
+                    seg_name = str(row.get('Segment', '')).strip()
+                    for s in segments:
+                        if seg_name.lower() == s.lower() or seg_name.lower() == s.lower() + "s":
+                            st.session_state[f"act_{s}"] = float(row.get('Actuals', row.get('Actual', 0)))
+                            st.session_state[f"tar_{s}"] = float(row.get('Target', 1))
+                st.session_state["header_info"] = f"Data imported from CSV: {uploaded_file.name}"
+                st.success("CSV loaded successfully!")
+                
+        except Exception as e:
+            st.error(f"Error reading file: {e}. Please enter numbers manually.")
 
 # --- INPUT UI ---
 col1, col2 = st.columns([1, 2])
 with col1:
-    midpoint_input = st.text_input("Target Commission (Statement Midpoint):", value=midpoint_input_val)
-    sabc_overall_target = st.text_input("SABC Multiplier Target (Pre-filled from PDF):", value=sabc_target_default)
+    midpoint_input = st.text_input("Target Commission (Statement Midpoint):", key="midpoint_input_val")
+    sabc_overall_target = st.text_input("SABC Multiplier Target (Pre-filled from PDF):", key="sabc_target_default")
     scale_2021 = st.selectbox("2021 Midpoints (Scale Code):", list(MIDPOINTS_2021.keys()))
     scale_current = st.selectbox("Current Midpoints (Scale Code):", list(MIDPOINTS_CURRENT.keys()))
 
-st.subheader("Statement Values Verification")
-cols = st.columns(3)
+st.subheader("Statement Values Verification (Override Blank Values)")
+cols = st.columns([3, 2, 2, 1])
 cols[0].write("**Segment Name**")
 cols[1].write("**Actual Revenue**")
 cols[2].write("**Target Revenue**")
 
 entries = []
 for s in segments:
-    col_a, col_b, col_c = st.columns(3)
+    col_a, col_b, col_c, col_d = st.columns([3, 2, 2, 1])
     col_a.write(s)
-    act = col_b.number_input(f"Act {s}", value=float(form_data[s]["act"]), step=1000.0, label_visibility="collapsed")
-    tar = col_c.number_input(f"Tar {s}", value=float(form_data[s]["tar"]), step=1000.0, label_visibility="collapsed")
+    # The keys automatically bind to st.session_state
+    act = col_b.number_input(f"Act {s}", key=f"act_{s}", step=1000.0, label_visibility="collapsed")
+    tar = col_c.number_input(f"Tar {s}", key=f"tar_{s}", step=1000.0, label_visibility="collapsed")
+    col_d.button("🔴 Swap", key=f"swap_btn_{s}", on_click=swap_act_tar, args=(s,), help="Moves Actual to Target, and sets Actual to 0")
     entries.append({"name": s, "act": act, "tar": tar})
 
 st.divider()
@@ -290,7 +297,6 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         
         st.header(f"SABC OWN WEIGHTING PAYOUT (Statement Midpoint): R {applied_manual['tot']:,.2f}")
         
-        # --- FORENSIC TARGET DISCREPANCY CHECK ---
         sabc_declared_target = Decimal(str(sabc_overall_target).replace(',', ''))
         target_discrepancy = tt - sabc_declared_target
         
@@ -303,7 +309,7 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
             target_warning += f"(SABC artificially lowered the overall target, inflating the achievement %)\n\n"
             st.error(target_warning)
             
-        display_filename = header_info if header_info else (uploaded_file.name if uploaded_file else "[Manual Entry]")
+        display_filename = st.session_state["header_info"] if st.session_state["header_info"] else (uploaded_file.name if uploaded_file else "[Manual Entry]")
         file_header = f"Forensic analysis of: {display_filename}\n\n"
 
         def build_audit_block(title, mid_val, mid_label, weights, lines, m_pay, tot, label_tot):
