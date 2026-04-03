@@ -180,16 +180,16 @@ if uploaded_file is not None:
             if tc_match:
                 midpoint_input_val = f"{parse_sabc_number(tc_match.group(1)):.2f}"
 
-            # Advanced Regex: Skip messy gaps, directly target the two numerical values after each Segment Name
+            # Advanced Regex: Skip messy gaps, explicitly look for numbers starting with digits
             for s in segments:
-                pattern = rf"{s}[^\d]*?([\d\.,]+)[^\d]*?([\d\.,]+)"
+                pattern = rf"{s}[^\d]*?(\d[\d\.,]*)[^\d]*?(\d[\d\.,]*)"
                 match = re.search(pattern, norm_pdf, re.IGNORECASE)
                 if match:
                     form_data[s]["act"] = parse_sabc_number(match.group(1))
                     form_data[s]["tar"] = parse_sabc_number(match.group(2))
 
             # Extract SABC's Multiplier Target from the bottom of the page
-            mult_match = re.search(r"Multiplier Commission[^\d]*?([\d\.,]+)[^\d]*?([\d\.,]+)", norm_pdf, re.IGNORECASE)
+            mult_match = re.search(r"Multiplier Commission[^\d]*?(\d[\d\.,]*)[^\d]*?(\d[\d\.,]*)", norm_pdf, re.IGNORECASE)
             if mult_match:
                 sabc_target_default = f"{parse_sabc_number(mult_match.group(2)):.2f}"
 
