@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import PyPDF2
 import re
+import io
 from decimal import Decimal, ROUND_HALF_UP
 from fpdf import FPDF
 
@@ -147,64 +148,91 @@ header_info = ""
 segments = ["Digital", "Radio Classic", "Radio Sponsorship", "Radio Sport Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship"]
 form_data = {s: {"act": 0.0, "tar": 1.0} for s in segments}
 
+# Bulletproof number parser (handles SABC's comma typos)
 def parse_sabc_number(num_str):
-    num_str = num_str.replace(',', '')
+    if not num_str: return 0.0
+    num_str = num_str.strip()
+    is_negative = num_str.startswith('-')
     parts = num_str.split('.')
     if len(parts) > 1:
-        return float(''.join(parts[:-1]) + '.' + parts[-1])
-    return float(num_str) if num_str else 0.0
+        integer_part = re.sub(r'\D', '', ''.join(parts[:-1]))
+        decimal_part = re.sub(r'\D', '', parts[-1])
+        final_str = f"{integer_part}.{decimal_part}"
+    else:
+        final_str = re.sub(r'\D', '', num_str)
+    val = float(final_str) if final_str else 0.0
+    return -val if is_negative else val
 
-# --- DATA UPLOAD & PARSING ---
+# --- DATA UPLOAD & FORENSIC PARSING ---
 uploaded_file = st.file_uploader("Upload SABC Statement (PDF, CSV, Excel)", type=['pdf', 'csv', 'xlsx'])
 
 if uploaded_file is not None:
     try:
-        if uploaded_file.name.endswith('.pdf'):
-            reader = PyPDF2.PdfReader(uploaded_file)
-            pdf_text = ""
-            for page in reader.pages:
-                pdf_text += page.extract_text() + "\n"
+        file_bytes = uploaded_file.read()
+        pdf_text = ""
+        
+        if uploaded_file.name.lower().endswith('.pdf'):
+            try:
+                reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+                for page in reader.pages:
+                    pdf_text += page.extract_text() + "\n"
+            except Exception:
+                pass # If PyPDF2 crashes, we catch the CSV-in-PDF below
             
-            # Remove all line breaks to fix SAP CSV-in-PDF formatting
-            norm_pdf = re.sub(r'\s+', ' ', pdf_text).replace('"', '')
+            # If PyPDF2 extracted nothing (or crashed), violently decode the raw file bytes
+            if len(pdf_text.strip()) < 50:
+                try:
+                    pdf_text = file_bytes.decode('utf-8')
+                except Exception:
+                    pdf_text = file_bytes.decode('latin-1', errors='ignore')
+                    
+            # Normalize SAP's messy text format
+            norm_text = pdf_text.replace('"', '')
+            norm_text = re.sub(r'\s+', ' ', norm_text)
             
-            # Extract Header
-            date_match = re.search(r"Commission Statement for (.*?)(?:Personnel|$)", norm_pdf, re.IGNORECASE)
-            pers_match = re.search(r"Personnel Number:\s*(\d+\s+[A-Za-z\s]+?)\s*Position", norm_pdf, re.IGNORECASE)
-            tc_match = re.search(r"Target Commission:\s*([\d\.,]+)", norm_pdf, re.IGNORECASE)
+            # Extract Header Info
+            date_match = re.search(r"Commission Statement for\s+([A-Za-z]+\s+\d{4})", norm_text, re.IGNORECASE)
+            pers_match = re.search(r"Personnel Number:\s*(\d+\s+[A-Za-z\s]+?)\s*(?:Position|Target)", norm_text, re.IGNORECASE)
+            tc_match = re.search(r"Target Commission:[^\d]*?([\d\.,]+\.\d{2})", norm_text, re.IGNORECASE)
 
             h_date = date_match.group(1).strip() if date_match else "Unknown Date"
             h_pers = pers_match.group(1).strip() if pers_match else "Unknown Personnel"
-            header_info = f"Statement: {h_date} | Personnel: {h_pers}"
+            
+            if h_date != "Unknown Date" or h_pers != "Unknown Personnel":
+                header_info = f"Statement: {h_date} | Personnel: {h_pers}"
             
             if tc_match:
                 midpoint_input_val = f"{parse_sabc_number(tc_match.group(1)):.2f}"
 
-            # Advanced Regex: Skip messy gaps, explicitly look for numbers starting with digits
+            # Extract Segment Data using Armor-Piercing Regex
             for s in segments:
-                pattern = rf"{s}[^\d]*?(\d[\d\.,]*)[^\d]*?(\d[\d\.,]*)"
-                match = re.search(pattern, norm_pdf, re.IGNORECASE)
+                # Allows for typos like "Radio Sponsorships"
+                s_regex = s.replace(' ', r'\s*') + r"s?"
+                # Skips empty columns and strictly captures the two numbers ending in .XX
+                pattern = rf"{s_regex}[^\d]*?(-?\d[\d\.,]*\.\d{{2}})[^\d]*?(-?\d[\d\.,]*\.\d{{2}})"
+                match = re.search(pattern, norm_text, re.IGNORECASE)
                 if match:
                     form_data[s]["act"] = parse_sabc_number(match.group(1))
                     form_data[s]["tar"] = parse_sabc_number(match.group(2))
 
-            # Extract SABC's Multiplier Target from the bottom of the page
-            mult_match = re.search(r"Multiplier Commission[^\d]*?(\d[\d\.,]*)[^\d]*?(\d[\d\.,]*)", norm_pdf, re.IGNORECASE)
+            # Extract SABC's Manipulated Target from the bottom
+            mult_match = re.search(r"Multiplier Commission[^\d]*?(-?\d[\d\.,]*\.\d{2})[^\d]*?(-?\d[\d\.,]*\.\d{2})", norm_text, re.IGNORECASE)
             if mult_match:
                 sabc_target_default = f"{parse_sabc_number(mult_match.group(2)):.2f}"
 
-            st.success("PDF parsed successfully! Please verify the numbers below.")
+            st.success("File parsed successfully! Please verify the extracted numbers below.")
 
-        elif uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file, encoding='latin-1')
+        elif uploaded_file.name.lower().endswith('.csv'):
+            df = pd.read_csv(io.BytesIO(file_bytes), encoding='latin-1')
             for _, row in df.iterrows():
                 seg_name = str(row.get('Segment', '')).strip()
                 for s in segments:
-                    if seg_name.lower() == s.lower():
+                    if seg_name.lower() == s.lower() or seg_name.lower() == s.lower() + "s":
                         form_data[s]["act"] = float(row.get('Actuals', row.get('Actual', 0)))
                         form_data[s]["tar"] = float(row.get('Target', 1))
             header_info = f"Data imported from CSV: {uploaded_file.name}"
             st.success("CSV loaded successfully!")
+            
     except Exception as e:
         st.error(f"Error reading file: {e}. Please enter numbers manually.")
 
