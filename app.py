@@ -60,7 +60,6 @@ def run_scenario(entries, mid, w_map, m_pay, logic_type):
         a, t = Decimal(str(e["act"])), Decimal(str(e["tar"]))
         w = Decimal(str(w_map.get(e["name"], 0))) / 100
         
-        # Skip streams with 0% weighting to keep the report clean
         if w == Decimal('0'):
             continue
             
@@ -68,14 +67,13 @@ def run_scenario(entries, mid, w_map, m_pay, logic_type):
         sc = (mid * w) if ach >= 1.0 else Decimal('0')
         sum_seg += sc
         
-        # Detailed Formatting: Stream | Actual | Target | % Ach | Commission
         lines.append(f"{e['name']:<23} R{a:>11,.2f} | R{t:>11,.2f} | {ach*100:>7.1f}% | R{sc:>11,.2f}")
     
     total = max(sum_seg, m_pay) if logic_type == 'absorbed' else sum_seg + m_pay
     return {"lines": lines, "tot": total}
 
-# --- COPILOT LOGIC IMPLEMENTATIONS ---
-def run_copilot_sports_logic(entries, target_commission):
+# --- ALTERNATIVE CALCULATION IMPLEMENTATIONS ---
+def run_alternative_sports_logic(entries, target_commission):
     lines = []
     
     act_tv = next((Decimal(str(e["act"])) for e in entries if e["name"] == "TV Sport Sponsorship"), Decimal('0'))
@@ -89,7 +87,6 @@ def run_copilot_sports_logic(entries, target_commission):
     pct_rad = (act_rad / tar_rad) * 100 if tar_rad > 0 else Decimal('0')
     pct_dig = (act_dig / tar_dig) * 100 if tar_dig > 0 else Decimal('0')
 
-    # Detailed Line Generation
     lines.append(f"{'TV Sport Sponsorship':<23} R{act_tv:>11,.2f} | R{tar_tv:>11,.2f} | {pct_tv:>7.1f}% |   (Pooled)")
     lines.append(f"{'Radio Sport Sponsorship':<23} R{act_rad:>11,.2f} | R{tar_rad:>11,.2f} | {pct_rad:>7.1f}% |   (Pooled)")
     lines.append(f"{'Digital':<23} R{act_dig:>11,.2f} | R{tar_dig:>11,.2f} | {pct_dig:>7.1f}% |   (Pooled)")
@@ -117,7 +114,7 @@ def run_copilot_sports_logic(entries, target_commission):
         
         return target_commission * mult, f"MODE A (Both Hit - {weighted_pct:.1f}% Weighted)", f"{mult}x", weighted_pct, lines
 
-def run_copilot_smme_logic(entries, target_commission):
+def run_alternative_smme_logic(entries, target_commission):
     lines = []
     non_digital = ["Radio Classic", "Radio Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship", "Radio Sport Sponsorship"]
     
@@ -139,7 +136,6 @@ def run_copilot_smme_logic(entries, target_commission):
         t = Decimal(str(e["tar"]))
         pct = (a / t) * 100 if t > 0 else Decimal('0')
         
-        # Calculate individual payouts ONLY if overall < 100 (Copilot's rule)
         sc = Decimal('0')
         sc_display = "  (Pooled)"
         if overall_pct < 100:
@@ -169,7 +165,7 @@ st.divider()
 
 col1, col2 = st.columns([1, 2])
 with col1:
-    midpoint_input = st.text_input("Target Commission (Manual Midpoint):", value="27276.33")
+    midpoint_input = st.text_input("Target Commission (Statement Midpoint):", value="27276.33")
     scale_2021 = st.selectbox("2021 Midpoints (Scale Code):", list(MIDPOINTS_2021.keys()))
     scale_current = st.selectbox("Current Midpoints (Scale Code):", list(MIDPOINTS_CURRENT.keys()))
     
@@ -241,12 +237,16 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         policy_2021    = run_scenario(entries, mid_2021, active_pol_w, m_pay_2021, 'additive')
         policy_curr    = run_scenario(entries, mid_curr, active_pol_w, m_pay_curr, 'additive')
         
-        st.header(f"SABC APPLIED PAYOUT (Manual Midpoint): R {applied_manual['tot']:,.2f}")
+        st.header(f"SABC OWN WEIGHTING PAYOUT (Statement Midpoint): R {applied_manual['tot']:,.2f}")
         
+        # Display File Name Header
+        display_filename = uploaded_file.name if uploaded_file else "[Manual Entry]"
+        file_header = f"Forensic analysis of file: {display_filename}\n\n"
+
         def build_audit_block(title, mid_val, mid_label, weights, lines, m_pay, tot, label_tot):
             b = f"--- {title} ---\n"
             b += f"Profile: {selected_profile}\n"
-            b += f"Midpoint Used: R {mid_val:,.2f} {mid_label}\n"
+            b += f"Midpoint Applied: R {mid_val:,.2f} {mid_label}\n"
             b += f"Weights Applied: {weights} | Total Ach: {rev_ach}% | Mult: {m}x\n"
             b += f"{'STREAM':<23} {'ACTUAL':>13} | {'TARGET':>13} | {'% ACH':>8} | {'COMMISSION':>13}\n" + "-"*81 + "\n"
             b += "\n".join(lines) + "\n" + "-"*81 + "\n"
@@ -254,44 +254,47 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
             b += f"{label_tot:<35} R {tot:>12,.2f}\n"
             return b
 
-        def build_copilot_block(title, c_mode, c_mult, lines, c_tot, scale_label=""):
+        def build_alternative_block(title, c_mode, c_mult, lines, c_tot, scale_label=""):
             b = f"--- {title} ---\n"
             b += f"Logic Rule: {c_mode}\nMultiplier Applied: {c_mult}\n"
             b += f"{'STREAM':<23} {'ACTUAL':>13} | {'TARGET':>13} | {'% ACH':>8} | {'COMMISSION':>13}\n" + "-"*81 + "\n"
             b += "\n".join(lines) + "\n" + "-"*81 + "\n"
-            b += f"FINAL COPILOT PAYOUT {scale_label}: R {c_tot:>12,.2f}\n\n"
+            b += f"FINAL ALTERNATIVE PAYOUT {scale_label}: R {c_tot:>12,.2f}\n\n"
             return b
 
-        audit1 = build_audit_block("SCENARIO 1: SABC APPLIED (MANUAL MIDPOINT)", mid_manual, "(Manual Entry)", str_stmt, applied_manual["lines"], m_pay_manual, applied_manual["tot"], "FINAL SABC PAYOUT (Absorbed):")
-        audit2 = build_audit_block("SCENARIO 2: SABC APPLIED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", str_stmt, applied_curr["lines"], m_pay_curr, applied_curr["tot"], "FINAL SABC PAYOUT (Absorbed):")
-        audit3 = build_audit_block("SCENARIO 3: POLICY DICTATED (MANUAL MIDPOINT)", mid_manual, "(Manual Entry)", str_pol, policy_manual["lines"], m_pay_manual, policy_manual["tot"], "FINAL POLICY DUE (Additive):")
+        audit1 = file_header + build_audit_block("SCENARIO 1: SABC OWN WEIGHTING (STATEMENT MIDPOINT)", mid_manual, "(Statement Entry)", str_stmt, applied_manual["lines"], m_pay_manual, applied_manual["tot"], "FINAL SABC PAYOUT (Absorbed):")
+        audit2 = build_audit_block("SCENARIO 2: SABC OWN WEIGHTING (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", str_stmt, applied_curr["lines"], m_pay_curr, applied_curr["tot"], "FINAL SABC PAYOUT (Absorbed):")
+        audit3 = build_audit_block("SCENARIO 3: POLICY DICTATED (STATEMENT MIDPOINT)", mid_manual, "(Statement Entry)", str_pol, policy_manual["lines"], m_pay_manual, policy_manual["tot"], "FINAL POLICY DUE (Additive):")
         audit4 = build_audit_block("SCENARIO 4: POLICY DICTATED (2021 SCALES)", mid_2021, f"(Scale {scale_2021} / 12)", str_pol, policy_2021["lines"], m_pay_2021, policy_2021["tot"], "FINAL POLICY DUE (Additive):")
         audit5 = build_audit_block("SCENARIO 5: POLICY DICTATED (CURRENT SCALES)", mid_curr, f"(Scale {scale_current} / 12)", str_pol, policy_curr["lines"], m_pay_curr, policy_curr["tot"], "FINAL POLICY DUE (Additive):")
 
-        # COPILOT SCENARIO (MANUAL & CURRENT)
+        # ALTERNATIVE SCENARIO (MANUAL & CURRENT)
         if selected_profile == "Sports PM":
-            c_tot_man, c_mod_man, c_mul_man, _, c_lines_man = run_copilot_sports_logic(entries, mid_manual)
-            c_tot_cur, c_mod_cur, c_mul_cur, _, c_lines_cur = run_copilot_sports_logic(entries, mid_curr)
+            c_tot_man, c_mod_man, c_mul_man, _, c_lines_man = run_alternative_sports_logic(entries, mid_manual)
+            c_tot_cur, c_mod_cur, c_mul_cur, _, c_lines_cur = run_alternative_sports_logic(entries, mid_curr)
         else:
-            c_tot_man, c_mod_man, c_mul_man, _, c_lines_man = run_copilot_smme_logic(entries, mid_manual)
-            c_tot_cur, c_mod_cur, c_mul_cur, _, c_lines_cur = run_copilot_smme_logic(entries, mid_curr)
+            c_tot_man, c_mod_man, c_mul_man, _, c_lines_man = run_alternative_smme_logic(entries, mid_manual)
+            c_tot_cur, c_mod_cur, c_mul_cur, _, c_lines_cur = run_alternative_smme_logic(entries, mid_curr)
             
-        audit6 = build_copilot_block("SCENARIO 6: COPILOT SUGGESTED LOGIC (MANUAL MIDPOINT)", c_mod_man, c_mul_man, c_lines_man, c_tot_man, "(Manual)")
-        audit7 = build_copilot_block("SCENARIO 7: COPILOT SUGGESTED LOGIC (CURRENT SCALES)", c_mod_cur, c_mul_cur, c_lines_cur, c_tot_cur, f"(Scale {scale_current})")
+        audit6 = build_alternative_block("SCENARIO 6: ALTERNATIVE CALCULATION (STATEMENT MIDPOINT)", c_mod_man, c_mul_man, c_lines_man, c_tot_man, "(Statement)")
+        audit7 = build_alternative_block("SCENARIO 7: ALTERNATIVE CALCULATION (CURRENT SCALES)", c_mod_cur, c_mul_cur, c_lines_cur, c_tot_cur, f"(Scale {scale_current})")
+
+        short_payment_midpoint = applied_curr['tot'] - applied_manual['tot']
 
         adv = "--- FORENSIC DISCREPANCY SUMMARY ---\n\n"
         adv += f"Profile Audited: {selected_profile}\n\n"
-        adv += f"1. SABC APPLIED (Manual):                R {applied_manual['tot']:>12,.2f}\n"
-        adv += f"2. SABC APPLIED @ Current (Scale {scale_current:<4}):  R {applied_curr['tot']:>12,.2f}\n"
-        adv += f"3. POLICY DUE (Manual):                  R {policy_manual['tot']:>12,.2f}\n"
+        adv += f"1. SABC OWN WEIGHTING (Statement):       R {applied_manual['tot']:>12,.2f}\n"
+        adv += f"2. SABC OWN WEIGHTING @ Current (Scale {scale_current:<4}): R {applied_curr['tot']:>12,.2f}\n"
+        adv += f"3. POLICY DUE (Statement):               R {policy_manual['tot']:>12,.2f}\n"
         adv += f"4. POLICY DUE @ 2021 (Scale {scale_2021:<4}):      R {policy_2021['tot']:>12,.2f}\n"
         adv += f"5. POLICY DUE @ Current (Scale {scale_current:<4}):   R {policy_curr['tot']:>12,.2f}\n"
-        adv += f"6. COPILOT LOGIC (Manual):               R {c_tot_man:>12,.2f}\n"
-        adv += f"7. COPILOT LOGIC @ Current (Scale {scale_current:<4}): R {c_tot_cur:>12,.2f}\n"
+        adv += f"6. ALTERNATIVE CALCULATION (Statement):  R {c_tot_man:>12,.2f}\n"
+        adv += f"7. ALTERNATIVE CALCULATION @ Current:    R {c_tot_cur:>12,.2f}\n"
         adv += "-"*56 + "\n"
-        adv += f"SHORTFALL A (Policy Manual vs SABC Manual):   R {(policy_manual['tot'] - applied_manual['tot']):>12,.2f}\n"
+        adv += f"SHORTFALL A (Policy Stmt vs SABC Stmt):       R {(policy_manual['tot'] - applied_manual['tot']):>12,.2f}\n"
         adv += f"SHORTFALL B (Policy Current vs SABC Current): R {(policy_curr['tot'] - applied_curr['tot']):>12,.2f}\n"
-        adv += f"ULTIMATE SHORTFALL (Policy Curr vs SABC Man): R {(policy_curr['tot'] - applied_manual['tot']):>12,.2f}\n"
+        adv += f"ULTIMATE SHORTFALL (Policy Curr vs SABC Stmt):R {(policy_curr['tot'] - applied_manual['tot']):>12,.2f}\n\n"
+        adv += f"SHORTPAYMENT DUE TO WRONG MIDPOINT APPLIED:   R {short_payment_midpoint:>12,.2f}\n"
 
         col_out1, col_out2 = st.columns(2)
         with col_out1: 
