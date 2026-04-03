@@ -140,22 +140,23 @@ st.title("BEMAWU Dual-Profile Forensic Simulator")
 selected_profile = st.radio("Select AE Profile / Category:", ["Standard AE / SMME", "Sports PM"], horizontal=True)
 st.divider()
 
-col1, col2 = st.columns([1, 2])
-with col1:
-    midpoint_input = st.text_input("Target Commission (Statement Midpoint):", value="27276.33")
-    sabc_overall_target = st.text_input("SABC Multiplier Revenue Target (From bottom of PDF):", value="7917181.70")
-    scale_2021 = st.selectbox("2021 Midpoints (Scale Code):", list(MIDPOINTS_2021.keys()))
-    scale_current = st.selectbox("Current Midpoints (Scale Code):", list(MIDPOINTS_CURRENT.keys()))
-    
-with col2:
-    uploaded_file = st.file_uploader("Upload SABC Statement (PDF, CSV, Excel)", type=['pdf', 'csv', 'xlsx'])
-
+# Defaults
+midpoint_input_val = "27276.33"
+sabc_target_default = "7917181.70"
+header_info = ""
 segments = ["Digital", "Radio Classic", "Radio Sponsorship", "Radio Sport Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship"]
 form_data = {s: {"act": 0.0, "tar": 1.0} for s in segments}
 
-header_info = ""
+def parse_sabc_number(num_str):
+    num_str = num_str.replace(',', '')
+    parts = num_str.split('.')
+    if len(parts) > 1:
+        return float(''.join(parts[:-1]) + '.' + parts[-1])
+    return float(num_str) if num_str else 0.0
 
-# --- PARSE UPLOADED FILE ---
+# --- DATA UPLOAD & PARSING ---
+uploaded_file = st.file_uploader("Upload SABC Statement (PDF, CSV, Excel)", type=['pdf', 'csv', 'xlsx'])
+
 if uploaded_file is not None:
     try:
         if uploaded_file.name.endswith('.pdf'):
@@ -164,26 +165,34 @@ if uploaded_file is not None:
             for page in reader.pages:
                 pdf_text += page.extract_text() + "\n"
             
-            # Extract Header Info
-            date_match = re.search(r"Commission Statement for (.*)", pdf_text)
-            pers_match = re.search(r"Personnel Number:\s*(.*)", pdf_text)
-            tc_match = re.search(r"Target Commission:[\s\S]*?([\d,]+\.\d{2})", pdf_text)
+            # Remove all line breaks to fix SAP CSV-in-PDF formatting
+            norm_pdf = re.sub(r'\s+', ' ', pdf_text).replace('"', '')
+            
+            # Extract Header
+            date_match = re.search(r"Commission Statement for (.*?)(?:Personnel|$)", norm_pdf, re.IGNORECASE)
+            pers_match = re.search(r"Personnel Number:\s*(\d+\s+[A-Za-z\s]+?)\s*Position", norm_pdf, re.IGNORECASE)
+            tc_match = re.search(r"Target Commission:\s*([\d\.,]+)", norm_pdf, re.IGNORECASE)
 
             h_date = date_match.group(1).strip() if date_match else "Unknown Date"
             h_pers = pers_match.group(1).strip() if pers_match else "Unknown Personnel"
             header_info = f"Statement: {h_date} | Personnel: {h_pers}"
             
             if tc_match:
-                midpoint_input = tc_match.group(1).replace(',', '')
+                midpoint_input_val = f"{parse_sabc_number(tc_match.group(1)):.2f}"
 
-            # Extract Table Rows (Best Effort Regex for SABC format)
+            # Advanced Regex: Skip messy gaps, directly target the two numerical values after each Segment Name
             for s in segments:
-                # Look for Segment Name followed by spaces/numbers
-                pattern = rf"{s}[\s\S]*?([\d,]+\.\d{{2}})[\s\S]*?([\d,]+\.\d{{2}})"
-                match = re.search(pattern, pdf_text, re.IGNORECASE)
+                pattern = rf"{s}[^\d]*?([\d\.,]+)[^\d]*?([\d\.,]+)"
+                match = re.search(pattern, norm_pdf, re.IGNORECASE)
                 if match:
-                    form_data[s]["act"] = float(match.group(1).replace(',', ''))
-                    form_data[s]["tar"] = float(match.group(2).replace(',', ''))
+                    form_data[s]["act"] = parse_sabc_number(match.group(1))
+                    form_data[s]["tar"] = parse_sabc_number(match.group(2))
+
+            # Extract SABC's Multiplier Target from the bottom of the page
+            mult_match = re.search(r"Multiplier Commission[^\d]*?([\d\.,]+)[^\d]*?([\d\.,]+)", norm_pdf, re.IGNORECASE)
+            if mult_match:
+                sabc_target_default = f"{parse_sabc_number(mult_match.group(2)):.2f}"
+
             st.success("PDF parsed successfully! Please verify the numbers below.")
 
         elif uploaded_file.name.endswith('.csv'):
@@ -198,6 +207,14 @@ if uploaded_file is not None:
             st.success("CSV loaded successfully!")
     except Exception as e:
         st.error(f"Error reading file: {e}. Please enter numbers manually.")
+
+# --- INPUT UI ---
+col1, col2 = st.columns([1, 2])
+with col1:
+    midpoint_input = st.text_input("Target Commission (Statement Midpoint):", value=midpoint_input_val)
+    sabc_overall_target = st.text_input("SABC Multiplier Target (Pre-filled from PDF):", value=sabc_target_default)
+    scale_2021 = st.selectbox("2021 Midpoints (Scale Code):", list(MIDPOINTS_2021.keys()))
+    scale_current = st.selectbox("Current Midpoints (Scale Code):", list(MIDPOINTS_CURRENT.keys()))
 
 st.subheader("Statement Values Verification")
 cols = st.columns(3)
@@ -216,7 +233,7 @@ for s in segments:
 st.divider()
 custom_filename = st.text_input("Save PDF Report As (File Name):", value="BEMAWU_Audit_Report")
 
-# --- CALCULATION ---
+# --- CALCULATION ENGINE ---
 if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True):
     try:
         active_stmt_w = PROFILES[selected_profile]["statement"]
