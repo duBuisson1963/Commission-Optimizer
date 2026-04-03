@@ -259,7 +259,6 @@ entries = []
 for s in segments:
     col_a, col_b, col_c, col_d = st.columns([3, 2, 2, 1])
     col_a.write(s)
-    # The keys automatically bind to st.session_state
     act = col_b.number_input(f"Act {s}", key=f"act_{s}", step=1000.0, label_visibility="collapsed")
     tar = col_c.number_input(f"Tar {s}", key=f"tar_{s}", step=1000.0, label_visibility="collapsed")
     col_d.button("🔴 Swap", key=f"swap_btn_{s}", on_click=swap_act_tar, args=(s,), help="Moves Actual to Target, and sets Actual to 0")
@@ -297,16 +296,23 @@ if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True
         
         st.header(f"SABC OWN WEIGHTING PAYOUT (Statement Midpoint): R {applied_manual['tot']:,.2f}")
         
+        # --- FORENSIC TARGET DISCREPANCY CHECK ---
         sabc_declared_target = Decimal(str(sabc_overall_target).replace(',', ''))
         target_discrepancy = tt - sabc_declared_target
         
         target_warning = ""
         if abs(target_discrepancy) > Decimal('10'):
+            # DYNAMIC MANIPULATION TEXT
+            if sabc_declared_target < tt:
+                manip_text = "(SABC artificially lowered the overall target, inflating the achievement %)"
+            else:
+                manip_text = "(SABC artificially INFLATED the overall target, deflating the achievement % - reducing the payout)"
+
             target_warning = f"!!! FORENSIC WARNING: TARGET MANIPULATION DETECTED !!!\n"
             target_warning += f"Sum of Individual Segment Targets: R {tt:,.2f}\n"
             target_warning += f"Target Used by SABC for Multiplier: R {sabc_declared_target:,.2f}\n"
-            target_warning += f"Unexplained Target Gap:             R {target_discrepancy:,.2f}\n"
-            target_warning += f"(SABC artificially lowered the overall target, inflating the achievement %)\n\n"
+            target_warning += f"Unexplained Target Gap:             R {abs(target_discrepancy):,.2f}\n"
+            target_warning += f"{manip_text}\n\n"
             st.error(target_warning)
             
         display_filename = st.session_state["header_info"] if st.session_state["header_info"] else (uploaded_file.name if uploaded_file else "[Manual Entry]")
