@@ -213,6 +213,11 @@ def extract_file_data(file_obj):
 st.set_page_config(page_title="BEMAWU Forensic Audit", layout="wide")
 st.title("BEMAWU Dual-Profile Forensic Simulator")
 
+# Init persistent employee info across modes
+if "emp_name" not in st.session_state: st.session_state["emp_name"] = ""
+if "pers_num" not in st.session_state: st.session_state["pers_num"] = ""
+if "period" not in st.session_state: st.session_state["period"] = ""
+
 col_top1, col_top2 = st.columns(2)
 with col_top1:
     selected_profile = st.radio("Select AE Profile / Category:", ["Standard AE / SMME", "Sports PM"], horizontal=True)
@@ -226,6 +231,23 @@ st.divider()
 if analysis_mode == "Bulk Statements (Underpayment Summary)":
     st.subheader("Bulk Forensic Underpayment Compiler")
     uploaded_files = st.file_uploader("Upload all SABC Statements for this member (PDF/CSV)", type=['pdf', 'csv', 'xlsx'], accept_multiple_files=True)
+    
+    # Try to auto-extract name/pers_num from the very first uploaded file to pre-fill the boxes
+    if uploaded_files:
+        if not st.session_state["emp_name"] or not st.session_state["pers_num"]:
+            for f in uploaded_files:
+                f.seek(0)
+                temp_data = extract_file_data(f)
+                if temp_data["emp_name"] and not st.session_state["emp_name"]: st.session_state["emp_name"] = temp_data["emp_name"]
+                if temp_data["pers_num"] and not st.session_state["pers_num"]: st.session_state["pers_num"] = temp_data["pers_num"]
+                if st.session_state["emp_name"]: break
+
+    st.subheader("Employee Details (Extracted or Manual Entry)")
+    col_e1, col_e2, col_e3 = st.columns(3)
+    with col_e1: st.text_input("Employee Name:", key="emp_name", placeholder="e.g. John Doe")
+    with col_e2: st.text_input("Personnel Number:", key="pers_num", placeholder="e.g. 11502")
+    with col_e3: st.text_input("Statement Period (Optional for Bulk):", key="period", placeholder="e.g. 2025 Financial Year")
+
     scale_current = st.selectbox("Correct Current Midpoint (Scale Code):", list(MIDPOINTS_CURRENT.keys()))
     
     if st.button("RUN BULK UNDERPAYMENT REPORT", type="primary", use_container_width=True) and uploaded_files:
@@ -234,14 +256,14 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
         
         bulk_results = []
         total_underpayment = Decimal('0')
-        emp_name, pers_num = "", ""
+        
+        disp_emp = st.session_state["emp_name"].strip() or "[Manual Entry]"
+        disp_pers = st.session_state["pers_num"].strip() or "[Manual Entry]"
+        disp_per = st.session_state["period"].strip()
 
         for file in uploaded_files:
             file.seek(0)
             data = extract_file_data(file)
-            
-            if data["emp_name"]: emp_name = data["emp_name"]
-            if data["pers_num"]: pers_num = data["pers_num"]
             
             entries = [{"name": s, "act": data["segments"][s]["act"], "tar": data["segments"][s]["tar"]} for s in ALL_SEGMENTS]
             
@@ -272,8 +294,10 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
             })
 
         rep = "FORENSIC ANALYSIS OF UNDERPAYMENT OF COMMISSION DUE TO WRONG MIDPOINT USED.\n\n"
-        rep += f"EMPLOYEE:          {emp_name or 'Unknown'}\n"
-        rep += f"PERSONNELL NUMBER: {pers_num or 'Unknown'}\n"
+        rep += f"EMPLOYEE:          {disp_emp}\n"
+        rep += f"PERSONNELL NUMBER: {disp_pers}\n"
+        if disp_per:
+            rep += f"PERIOD:            {disp_per}\n"
         rep += f"CORRECT MIDPOINT:  R {mid_curr:,.2f} (Scale {scale_current})\n\n"
         
         rep += f"{'PERIOD':<18} | {'STMT MIDPOINT':>13} | {'STMT COMM':>13} | {'CURR MIDPOINT':>13} | {'CURR COMM':>13} | {'DIFFERENCE':>13}\n"
@@ -293,9 +317,11 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
         pdf.multi_cell(0, 4, rep.encode('latin-1', 'replace').decode('latin-1'))
         pdf_bytes = pdf.output(dest='S').encode('latin-1')
         
-        safe_emp = emp_name.strip().replace(' ', '_') if emp_name else "Employee"
-        final_pdf_name = f"{safe_emp}_Bulk_UNDERPAID.pdf"
-        st.download_button(label="📄 Download Bulk Audit PDF", data=pdf_bytes, file_name=final_pdf_name, mime="application/pdf", type="primary")
+        safe_emp = disp_emp.replace(' ', '_') if disp_emp != "[Manual Entry]" else "Employee"
+        safe_per = f"_{disp_per.replace(' ', '_').replace('/', '-')}" if disp_per else ""
+        final_pdf_name = f"{safe_emp}{safe_per}_Bulk_UNDERPAID.pdf"
+        
+        st.download_button(label=f"📄 Download Bulk Audit PDF: {final_pdf_name}", data=pdf_bytes, file_name=final_pdf_name, mime="application/pdf", type="primary")
 
 
 # --- SINGLE STATEMENT MODE ---
@@ -304,9 +330,7 @@ if analysis_mode == "Single Statement":
     # Init persistent inputs
     if "midpoint_input_val" not in st.session_state: st.session_state["midpoint_input_val"] = "27276.33"
     if "sabc_target_default" not in st.session_state: st.session_state["sabc_target_default"] = "7917181.70"
-    if "emp_name" not in st.session_state: st.session_state["emp_name"] = ""
-    if "pers_num" not in st.session_state: st.session_state["pers_num"] = ""
-    if "period" not in st.session_state: st.session_state["period"] = ""
+    if "header_info" not in st.session_state: st.session_state["header_info"] = ""
 
     for s in ALL_SEGMENTS:
         if f"act_{s}" not in st.session_state: st.session_state[f"act_{s}"] = 0.0
@@ -339,12 +363,9 @@ if analysis_mode == "Single Statement":
 
     st.subheader("Employee Details (Extracted or Manual Entry)")
     col_e1, col_e2, col_e3 = st.columns(3)
-    with col_e1:
-        st.text_input("Employee Name:", key="emp_name", placeholder="e.g. John Doe")
-    with col_e2:
-        st.text_input("Personnel Number:", key="pers_num", placeholder="e.g. 11502")
-    with col_e3:
-        st.text_input("Statement Period:", key="period", placeholder="e.g. August 2025")
+    with col_e1: st.text_input("Employee Name:", key="emp_name", placeholder="e.g. John Doe")
+    with col_e2: st.text_input("Personnel Number:", key="pers_num", placeholder="e.g. 11502")
+    with col_e3: st.text_input("Statement Period:", key="period", placeholder="e.g. August 2025")
 
     st.divider()
 
@@ -531,7 +552,7 @@ if analysis_mode == "Single Statement":
                     
                 full_report = audit1 + "\n\n" + audit2 + "\n\n" + audit3 + "\n\n" + audit4 + "\n\n" + audit5 + "\n\n" + audit6 + audit7 + adv
 
-            # PDF Generator (Executes dynamically named files)
+            # PDF Generator
             pdf = FPDF()
             pdf.add_page()
             pdf.set_font("Courier", size=8)
