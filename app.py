@@ -154,7 +154,7 @@ def parse_sabc_number(num_str):
 
 def extract_file_data(file_obj):
     data = {
-        "period": "Unknown Period", "pers_num": "Unknown", "emp_name": "Unknown",
+        "period": "", "pers_num": "", "emp_name": "",
         "midpoint": 0.0, "sabc_target": 0.0, "segments": {}
     }
     for s in ALL_SEGMENTS: data["segments"][s] = {"act": 0.0, "tar": 1.0}
@@ -176,7 +176,7 @@ def extract_file_data(file_obj):
             norm_text = re.sub(r'\s+', ' ', norm_text)
             
             date_match = re.search(r"Commission Statement for\s+([A-Za-z]+\s+\d{4})", norm_text, re.IGNORECASE)
-            pers_match = re.search(r"Personnel Number:\s*(\d+)\s+([A-Za-z\s]+?)\s*(?:Position|Target)", norm_text, re.IGNORECASE)
+            pers_match = re.search(r"Personnel Number:\s*(\d+)\s+([A-Za-z\s]+?)\s*(?:Position|Target|ZAR)", norm_text, re.IGNORECASE)
             tc_match = re.search(r"Target Commission:[^\d]*?([\d\.,]+\.\d{2})", norm_text, re.IGNORECASE)
 
             if date_match: data["period"] = date_match.group(1).strip()
@@ -227,22 +227,21 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
     st.subheader("Bulk Forensic Underpayment Compiler")
     uploaded_files = st.file_uploader("Upload all SABC Statements for this member (PDF/CSV)", type=['pdf', 'csv', 'xlsx'], accept_multiple_files=True)
     scale_current = st.selectbox("Correct Current Midpoint (Scale Code):", list(MIDPOINTS_CURRENT.keys()))
-    custom_filename = st.text_input("Save PDF Report As (File Name):", value="BEMAWU_Bulk_Underpayment_Report")
-
+    
     if st.button("RUN BULK UNDERPAYMENT REPORT", type="primary", use_container_width=True) and uploaded_files:
         active_stmt_w = PROFILES[selected_profile]["statement"]
         mid_curr = (Decimal(str(MIDPOINTS_CURRENT[scale_current])) / 12).quantize(Decimal('0.01'), ROUND_HALF_UP)
         
         bulk_results = []
         total_underpayment = Decimal('0')
-        emp_name, pers_num = "Unknown", "Unknown"
+        emp_name, pers_num = "", ""
 
         for file in uploaded_files:
             file.seek(0)
             data = extract_file_data(file)
             
-            if data["emp_name"] != "Unknown": emp_name = data["emp_name"]
-            if data["pers_num"] != "Unknown": pers_num = data["pers_num"]
+            if data["emp_name"]: emp_name = data["emp_name"]
+            if data["pers_num"]: pers_num = data["pers_num"]
             
             entries = [{"name": s, "act": data["segments"][s]["act"], "tar": data["segments"][s]["tar"]} for s in ALL_SEGMENTS]
             
@@ -264,7 +263,7 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
             total_underpayment += diff
             
             bulk_results.append({
-                "period": data["period"],
+                "period": data["period"] or "Unknown",
                 "mid_stmt": mid_stmt,
                 "comm_stmt": applied_stmt['tot'],
                 "mid_curr": mid_curr,
@@ -273,8 +272,8 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
             })
 
         rep = "FORENSIC ANALYSIS OF UNDERPAYMENT OF COMMISSION DUE TO WRONG MIDPOINT USED.\n\n"
-        rep += f"EMPLOYEE:          {emp_name}\n"
-        rep += f"PERSONNELL NUMBER: {pers_num}\n"
+        rep += f"EMPLOYEE:          {emp_name or 'Unknown'}\n"
+        rep += f"PERSONNELL NUMBER: {pers_num or 'Unknown'}\n"
         rep += f"CORRECT MIDPOINT:  R {mid_curr:,.2f} (Scale {scale_current})\n\n"
         
         rep += f"{'PERIOD':<18} | {'STMT MIDPOINT':>13} | {'STMT COMM':>13} | {'CURR MIDPOINT':>13} | {'CURR COMM':>13} | {'DIFFERENCE':>13}\n"
@@ -294,7 +293,8 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
         pdf.multi_cell(0, 4, rep.encode('latin-1', 'replace').decode('latin-1'))
         pdf_bytes = pdf.output(dest='S').encode('latin-1')
         
-        final_pdf_name = custom_filename if custom_filename.endswith(".pdf") else f"{custom_filename}.pdf"
+        safe_emp = emp_name.strip().replace(' ', '_') if emp_name else "Employee"
+        final_pdf_name = f"{safe_emp}_Bulk_UNDERPAID.pdf"
         st.download_button(label="📄 Download Bulk Audit PDF", data=pdf_bytes, file_name=final_pdf_name, mime="application/pdf", type="primary")
 
 
@@ -304,10 +304,9 @@ if analysis_mode == "Single Statement":
     # Init persistent inputs
     if "midpoint_input_val" not in st.session_state: st.session_state["midpoint_input_val"] = "27276.33"
     if "sabc_target_default" not in st.session_state: st.session_state["sabc_target_default"] = "7917181.70"
-    if "header_info" not in st.session_state: st.session_state["header_info"] = ""
-    if "emp_name" not in st.session_state: st.session_state["emp_name"] = "[Manual Entry]"
-    if "pers_num" not in st.session_state: st.session_state["pers_num"] = "[Manual Entry]"
-    if "period" not in st.session_state: st.session_state["period"] = "[Manual Entry]"
+    if "emp_name" not in st.session_state: st.session_state["emp_name"] = ""
+    if "pers_num" not in st.session_state: st.session_state["pers_num"] = ""
+    if "period" not in st.session_state: st.session_state["period"] = ""
 
     for s in ALL_SEGMENTS:
         if f"act_{s}" not in st.session_state: st.session_state[f"act_{s}"] = 0.0
@@ -325,10 +324,10 @@ if analysis_mode == "Single Statement":
             st.session_state["last_file_hash"] = file_hash
             data = extract_file_data(uploaded_file)
             
-            st.session_state["period"] = data["period"]
-            st.session_state["pers_num"] = data["pers_num"]
-            st.session_state["emp_name"] = data["emp_name"]
-            st.session_state["header_info"] = f"Statement: {data['period']} | Personnel: {data['pers_num']}"
+            if data["period"]: st.session_state["period"] = data["period"]
+            if data["pers_num"]: st.session_state["pers_num"] = data["pers_num"]
+            if data["emp_name"]: st.session_state["emp_name"] = data["emp_name"]
+            
             if data["midpoint"] > 0: st.session_state["midpoint_input_val"] = f"{data['midpoint']:.2f}"
             if data["sabc_target"] > 0: st.session_state["sabc_target_default"] = f"{data['sabc_target']:.2f}"
             
@@ -336,7 +335,18 @@ if analysis_mode == "Single Statement":
                 st.session_state[f"act_{s}"] = data["segments"][s]["act"]
                 st.session_state[f"tar_{s}"] = data["segments"][s]["tar"]
             
-            st.success("File parsed successfully! Review empty targets below.")
+            st.success("File parsed successfully! Verify details below.")
+
+    st.subheader("Employee Details (Extracted or Manual Entry)")
+    col_e1, col_e2, col_e3 = st.columns(3)
+    with col_e1:
+        st.text_input("Employee Name:", key="emp_name", placeholder="e.g. John Doe")
+    with col_e2:
+        st.text_input("Personnel Number:", key="pers_num", placeholder="e.g. 11502")
+    with col_e3:
+        st.text_input("Statement Period:", key="period", placeholder="e.g. August 2025")
+
+    st.divider()
 
     col1, col2 = st.columns([1, 2])
     with col1:
@@ -369,7 +379,6 @@ if analysis_mode == "Single Statement":
             entries.append({"name": s, "act": st.session_state[f"act_{s}"], "tar": st.session_state[f"tar_{s}"]})
 
     st.divider()
-    custom_filename = st.text_input("Save PDF Report As (File Name):", value="BEMAWU_Audit_Report")
 
     if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True):
         try:
@@ -394,12 +403,16 @@ if analysis_mode == "Single Statement":
             applied_manual = run_scenario(entries, mid_manual, active_stmt_w, m_pay_manual, 'absorbed')
             applied_curr   = run_scenario(entries, mid_curr, active_stmt_w, m_pay_curr, 'absorbed')
             
+            disp_emp = st.session_state["emp_name"].strip() or "[Manual Entry]"
+            disp_pers = st.session_state["pers_num"].strip() or "[Manual Entry]"
+            disp_per = st.session_state["period"].strip() or "[Manual Entry]"
+
             if underpayment_only:
                 # --- NEW UNDERPAYMENT-ONLY REPORT ---
                 rep = "FORENSIC ANALYSIS OF UNDERPAYMENT OF COMMISSION DUE TO WRONG MIDPOINT USED.\n\n"
-                rep += f"EMPLOYEE:          {st.session_state['emp_name']}\n"
-                rep += f"PERSONNELL NUMBER: {st.session_state['pers_num']}\n"
-                rep += f"PERIOD:            {st.session_state['period']}\n"
+                rep += f"EMPLOYEE:          {disp_emp}\n"
+                rep += f"PERSONNELL NUMBER: {disp_pers}\n"
+                rep += f"PERIOD:            {disp_per}\n"
                 rep += f"MIDPOINT USED:     R {mid_manual:,.2f}\n"
                 rep += f"CORRECT MIDPOINT:  R {mid_curr:,.2f} (Scale {scale_current})\n\n"
 
@@ -448,8 +461,7 @@ if analysis_mode == "Single Statement":
                     target_warning += f"{manip_text}\n\n"
                     st.error(target_warning)
                     
-                display_filename = st.session_state["header_info"] if st.session_state["header_info"] else (uploaded_file.name if uploaded_file else "[Manual Entry]")
-                file_header = f"Forensic analysis of: {display_filename}\n\n"
+                file_header = f"Forensic analysis of: Statement: {disp_per} | Personnel: {disp_pers} ({disp_emp})\n\n"
 
                 def build_audit_block(title, mid_val, mid_label, weights, lines, m_pay, tot, label_tot):
                     b = f"--- {title} ---\n"
@@ -519,15 +531,19 @@ if analysis_mode == "Single Statement":
                     
                 full_report = audit1 + "\n\n" + audit2 + "\n\n" + audit3 + "\n\n" + audit4 + "\n\n" + audit5 + "\n\n" + audit6 + audit7 + adv
 
-            # PDF Generator (Executes for both Single Report Types)
+            # PDF Generator (Executes dynamically named files)
             pdf = FPDF()
             pdf.add_page()
             pdf.set_font("Courier", size=8)
             pdf.multi_cell(0, 4, full_report.encode('latin-1', 'replace').decode('latin-1'))
             pdf_bytes = pdf.output(dest='S').encode('latin-1')
             
-            final_pdf_name = custom_filename if custom_filename.endswith(".pdf") else f"{custom_filename}.pdf"
-            st.download_button(label="📄 Download Full PDF Audit Report", data=pdf_bytes, file_name=final_pdf_name, mime="application/pdf", type="primary")
+            safe_emp = disp_emp.replace(' ', '_') if disp_emp != "[Manual Entry]" else "Employee"
+            safe_per = disp_per.replace(' ', '_').replace('/', '-') if disp_per != "[Manual Entry]" else "Period"
+            
+            final_pdf_name = f"{safe_emp}_{safe_per}_UNDERPAID.pdf"
+            
+            st.download_button(label=f"📄 Download PDF: {final_pdf_name}", data=pdf_bytes, file_name=final_pdf_name, mime="application/pdf", type="primary")
                 
         except Exception as e:
             st.error(f"Calculation Error: Check inputs. Details: {e}")
