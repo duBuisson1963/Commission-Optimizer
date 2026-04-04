@@ -232,7 +232,6 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
     st.subheader("Bulk Forensic Underpayment Compiler")
     uploaded_files = st.file_uploader("Upload all SABC Statements for this member (PDF/CSV)", type=['pdf', 'csv', 'xlsx'], accept_multiple_files=True)
     
-    # Try to auto-extract name/pers_num from the very first uploaded file to pre-fill the boxes
     if uploaded_files:
         if not st.session_state["emp_name"] or not st.session_state["pers_num"]:
             for f in uploaded_files:
@@ -265,7 +264,18 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
             file.seek(0)
             data = extract_file_data(file)
             
-            entries = [{"name": s, "act": data["segments"][s]["act"], "tar": data["segments"][s]["tar"]} for s in ALL_SEGMENTS]
+            entries = []
+            for s in ALL_SEGMENTS:
+                act_val = data["segments"][s]["act"]
+                tar_val = data["segments"][s]["tar"]
+                
+                # --- BULK AUTO-SWAP INTELLIGENCE ---
+                # Detects the SABC SAP blank-column glitch where Target is captured as 100 Area %
+                if tar_val == 100.0 or tar_val == 100:
+                    tar_val = act_val
+                    act_val = 0.0
+                    
+                entries.append({"name": s, "act": act_val, "tar": tar_val})
             
             mid_stmt = Decimal(str(data["midpoint"])).quantize(Decimal('0.01'), ROUND_HALF_UP)
             if mid_stmt == Decimal('0'): mid_stmt = mid_curr # Fallback if missing
@@ -327,7 +337,6 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
 # --- SINGLE STATEMENT MODE ---
 if analysis_mode == "Single Statement":
     
-    # Init persistent inputs
     if "midpoint_input_val" not in st.session_state: st.session_state["midpoint_input_val"] = "27276.33"
     if "sabc_target_default" not in st.session_state: st.session_state["sabc_target_default"] = "7917181.70"
     if "header_info" not in st.session_state: st.session_state["header_info"] = ""
@@ -383,7 +392,6 @@ if analysis_mode == "Single Statement":
     cols[2].write("**Target Revenue**")
 
     entries = []
-    # DYNAMIC FIELD FILTER: Hide standard TV/Radio if Sports PM is selected
     visible_segments = ["Digital", "Radio Sport Sponsorship", "TV Sport Sponsorship"] if selected_profile == "Sports PM" else ALL_SEGMENTS
 
     for s in visible_segments:
@@ -394,7 +402,6 @@ if analysis_mode == "Single Statement":
         col_d.button("🔴 Swap", key=f"swap_btn_{s}", on_click=swap_act_tar, args=(s,), help="Moves Actual to Target")
         entries.append({"name": s, "act": act, "tar": tar})
 
-    # Keep hidden segments loaded in memory for the math engine
     for s in ALL_SEGMENTS:
         if s not in visible_segments:
             entries.append({"name": s, "act": st.session_state[f"act_{s}"], "tar": st.session_state[f"tar_{s}"]})
@@ -429,7 +436,6 @@ if analysis_mode == "Single Statement":
             disp_per = st.session_state["period"].strip() or "[Manual Entry]"
 
             if underpayment_only:
-                # --- NEW UNDERPAYMENT-ONLY REPORT ---
                 rep = "FORENSIC ANALYSIS OF UNDERPAYMENT OF COMMISSION DUE TO WRONG MIDPOINT USED.\n\n"
                 rep += f"EMPLOYEE:          {disp_emp}\n"
                 rep += f"PERSONNELL NUMBER: {disp_pers}\n"
@@ -460,7 +466,6 @@ if analysis_mode == "Single Statement":
                 full_report = rep
                 
             else:
-                # --- FULL FORENSIC REPORT ---
                 policy_manual  = run_scenario(entries, mid_manual, active_pol_w, m_pay_manual, 'additive')
                 policy_2021    = run_scenario(entries, mid_2021, active_pol_w, m_pay_2021, 'additive')
                 policy_curr    = run_scenario(entries, mid_curr, active_pol_w, m_pay_curr, 'additive')
@@ -552,7 +557,6 @@ if analysis_mode == "Single Statement":
                     
                 full_report = audit1 + "\n\n" + audit2 + "\n\n" + audit3 + "\n\n" + audit4 + "\n\n" + audit5 + "\n\n" + audit6 + audit7 + adv
 
-            # PDF Generator
             pdf = FPDF()
             pdf.add_page()
             pdf.set_font("Courier", size=8)
