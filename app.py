@@ -5,6 +5,7 @@ import re
 import io
 from decimal import Decimal, ROUND_HALF_UP
 from fpdf import FPDF
+from datetime import datetime
 
 # --- PROFILE WEIGHTS ---
 PROFILES = {
@@ -208,12 +209,19 @@ def extract_file_data(file_obj):
         pass
     return data
 
+def parse_period_for_sorting(period_str):
+    """Helper to chronologically sort strings like 'August 2025'"""
+    try:
+        return datetime.strptime(period_str.strip(), "%B %Y")
+    except Exception:
+        # If it fails to parse (e.g. "Unknown"), push to the end
+        return datetime.max
+
 
 # --- UI SETUP & STATE MANAGEMENT ---
 st.set_page_config(page_title="BEMAWU Forensic Audit", layout="wide")
 st.title("BEMAWU Dual-Profile Forensic Simulator")
 
-# Init persistent employee info across modes
 if "emp_name" not in st.session_state: st.session_state["emp_name"] = ""
 if "pers_num" not in st.session_state: st.session_state["pers_num"] = ""
 if "period" not in st.session_state: st.session_state["period"] = ""
@@ -269,8 +277,7 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
                 act_val = data["segments"][s]["act"]
                 tar_val = data["segments"][s]["tar"]
                 
-                # --- BULK AUTO-SWAP INTELLIGENCE ---
-                # Detects the SABC SAP blank-column glitch where Target is captured as 100 Area %
+                # Bulk Auto-Swap 
                 if tar_val == 100.0 or tar_val == 100:
                     tar_val = act_val
                     act_val = 0.0
@@ -302,6 +309,9 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
                 "comm_curr": applied_curr['tot'],
                 "diff": diff
             })
+
+        # --- Sort Results Chronologically ---
+        bulk_results.sort(key=lambda x: parse_period_for_sorting(x["period"]))
 
         rep = "FORENSIC ANALYSIS OF UNDERPAYMENT OF COMMISSION DUE TO WRONG MIDPOINT USED.\n\n"
         rep += f"EMPLOYEE:          {disp_emp}\n"
