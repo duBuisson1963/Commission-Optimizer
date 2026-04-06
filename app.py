@@ -7,7 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from fpdf import FPDF
 from datetime import datetime
 
-# --- CONFIG ---
+# --- CONFIG & SCALES ---
 PROFILES = {
     "Standard AE / SMME": {
         "statement": {"Radio Classic": 45.0, "TV Classic": 24.0, "TV Sponsorship": 6.0, "Radio Sponsorship": 15.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5},
@@ -53,8 +53,7 @@ def parse_sabc_number(num_str):
     num_str = str(num_str).strip().replace(' ', '')
     is_neg = num_str.startswith('-')
     parts = num_str.split('.')
-    if len(parts) > 1:
-        f_str = f"{re.sub(r'\D', '', ''.join(parts[:-1]))}.{re.sub(r'\D', '', parts[-1])}"
+    if len(parts) > 1: f_str = f"{re.sub(r'\D', '', ''.join(parts[:-1]))}.{re.sub(r'\D', '', parts[-1])}"
     else: f_str = re.sub(r'\D', '', num_str)
     val = float(f_str) if f_str else 0.0
     return -val if is_neg else val
@@ -89,9 +88,17 @@ def extract_file_data(f):
     except: pass
     return d
 
+# --- CALLBACKS ---
+def handle_swap(seg):
+    st.session_state[f"tar_{seg}"] = st.session_state[f"act_{seg}"]
+    st.session_state[f"act_{seg}"] = 0.0
+
 # --- INITIALIZE STATE ---
-for key in ["emp_name", "pers_num", "period", "midpoint_input_val", "sabc_target_default"]:
-    if key not in st.session_state: st.session_state[key] = ""
+if "emp_name" not in st.session_state: st.session_state["emp_name"] = ""
+if "pers_num" not in st.session_state: st.session_state["pers_num"] = ""
+if "period" not in st.session_state: st.session_state["period"] = ""
+if "midpoint_input_val" not in st.session_state: st.session_state["midpoint_input_val"] = "27276.33"
+if "sabc_target_default" not in st.session_state: st.session_state["sabc_target_default"] = "0.00"
 for s in ALL_SEGMENTS:
     if f"act_{s}" not in st.session_state: st.session_state[f"act_{s}"] = 0.0
     if f"tar_{s}" not in st.session_state: st.session_state[f"tar_{s}"] = 1.0
@@ -99,9 +106,6 @@ for s in ALL_SEGMENTS:
 # --- UI ---
 st.set_page_config(page_title="BEMAWU Forensic Audit", layout="wide")
 st.title("BEMAWU Dual-Profile Forensic Simulator")
-
-st.sidebar.header("Report Configuration")
-show_s = {i: st.sidebar.checkbox(f"Scenario {i}", True) for i in range(1, 8)}
 
 ct1, ct2 = st.columns(2)
 with ct1: selected_profile = st.radio("Select Profile:", ["Standard AE / SMME", "Sports PM"], horizontal=True)
@@ -115,8 +119,8 @@ if mode_sel == "Bulk Statements":
     c_e1, c_e2, c_e3 = st.columns(3)
     c_e1.text_input("Employee Name:", key="emp_name")
     c_e2.text_input("Personnel Number:", key="pers_num")
-    c_e3.text_input("Period:", key="period")
-    scale_curr_bulk = st.selectbox("Current Scale:", list(MIDPOINTS_CURRENT.keys()))
+    c_e3.text_input("Bulk Period Name:", key="period")
+    scale_curr_bulk = st.selectbox("Current Midpoint Scale:", list(MIDPOINTS_CURRENT.keys()))
     
     if st.button("RUN BULK REPORT") and up_files:
         mid_c = Decimal(str(MIDPOINTS_CURRENT[scale_curr_bulk])) / 12
@@ -134,13 +138,14 @@ if mode_sel == "Bulk Statements":
             res_c = run_scenario_calc(ents, mid_c, PROFILES[selected_profile]["statement"], m, 'absorbed')
             diff = res_c['tot'] - res_s['tot']; total_up += diff
             bulk_res.append({"per": d["period"], "ms": ms, "cs": res_s['tot'], "mc": mid_c, "cc": res_c['tot'], "df": diff})
-        st.code(f"BULK AUDIT: {st.session_state['emp_name']}\nTOTAL UNDERPAYMENT: R {total_up:,.2f}")
+        
+        rep = f"BULK FORENSIC AUDIT: {st.session_state['emp_name']}\nTOTAL UNDERPAYMENT DETECTED: R {total_up:,.2f}"
+        st.code(rep)
 
 else:
-    u_file = st.file_uploader("Upload Statement", type=['pdf', 'csv'])
+    u_file = st.file_uploader("Upload SABC PDF Statement", type=['pdf', 'csv'])
     if u_file:
         d = extract_file_data(u_file)
-        # Update session state ONLY if fields are blank to prevent disappearing names
         if not st.session_state["emp_name"]: st.session_state["emp_name"] = d["emp_name"]
         if not st.session_state["pers_num"]: st.session_state["pers_num"] = d["pers_num"]
         if not st.session_state["period"]: st.session_state["period"] = d["period"]
@@ -157,70 +162,87 @@ else:
     ci1, ci2 = st.columns([1, 2])
     with ci1:
         mid_in = st.text_input("Statement Midpoint:", key="midpoint_input_val")
-        sabc_t_in = st.text_input("SABC Total Target (Bottom of PDF):", key="sabc_target_default")
-        scale_c = st.selectbox("Current Scale (Benchmark):", list(MIDPOINTS_CURRENT.keys()))
-        scale_h = st.selectbox("2021 Scale (History):", list(MIDPOINTS_2021.keys()))
+        sabc_t_in = st.text_input("SABC Declared Target (from PDF bottom):", key="sabc_target_default")
+    with ci2:
+        scale_c = st.selectbox("Current Benchmark Scale:", list(MIDPOINTS_CURRENT.keys()))
+        scale_h = st.selectbox("Historical 2021 Scale:", list(MIDPOINTS_2021.keys()))
 
+    st.subheader("Statement Verification (Review extracted SAP figures)")
     vis = ["Digital", "Radio Sport Sponsorship", "TV Sport Sponsorship"] if selected_profile == "Sports PM" else ALL_SEGMENTS
     entries = []
     for s in vis:
         ca, cb, cc, cd = st.columns([3, 2, 2, 1])
         ca.write(f"**{s}**")
-        act_val = cb.number_input(f"Act {s}", key=f"act_{s}", step=100.0, label_visibility="collapsed")
-        tar_val = cc.number_input(f"Tar {s}", key=f"tar_{s}", step=100.0, label_visibility="collapsed")
-        if cd.button("Swap", key=f"sw_{s}"):
-            st.session_state[f"tar_{s}"], st.session_state[f"act_{s}"] = st.session_state[f"act_{s}"], 0.0
-            st.rerun()
-        entries.append({"name": s, "act": act_val, "tar": tar_val})
+        act_v = cb.number_input(f"Act {s}", key=f"act_{s}", step=100.0, label_visibility="collapsed")
+        tar_v = cc.number_input(f"Tar {s}", key=f"tar_{s}", step=100.0, label_visibility="collapsed")
+        cd.button("🔴 Swap", key=f"sw_{s}", on_click=handle_swap, args=(s,))
+        entries.append({"name": s, "act": act_v, "tar": tar_v})
     
-    # Hidden data preservation
     for s in ALL_SEGMENTS:
         if s not in vis: entries.append({"name": s, "act": st.session_state[f"act_{s}"], "tar": st.session_state[f"tar_{s}"]})
 
-    if st.button("RUN SCENARIO AUDIT", type="primary", use_container_width=True):
+    st.subheader("Reporting Options")
+    up_rep_only = st.checkbox("Underpayment Summary Only (Hides Scenario Details)")
+    sc_cols = st.columns(4)
+    sel = {}
+    sel[1] = sc_cols[0].checkbox("Show Scenario 1", True)
+    sel[2] = sc_cols[1].checkbox("Show Scenario 2", True)
+    sel[3] = sc_cols[2].checkbox("Show Scenario 3", True)
+    sel[4] = sc_cols[3].checkbox("Show Scenario 4", True)
+    sel[5] = sc_cols[0].checkbox("Show Scenario 5", True)
+    sel[6] = sc_cols[1].checkbox("Show Scenario 6", True)
+    sel[7] = sc_cols[2].checkbox("Show Scenario 7", True)
+
+    if st.button("RUN FORENSIC ANALYSIS", type="primary", use_container_width=True):
         m_stmt = Decimal(str(mid_in).replace(',',''))
         m_curr = Decimal(str(MIDPOINTS_CURRENT[scale_c])) / 12
-        m_2021 = Decimal(str(MIDPOINTS_2021[scale_h])) / 12
+        m_21 = Decimal(str(MIDPOINTS_2021[scale_h])) / 12
         t_sabc = Decimal(str(sabc_t_in).replace(',',''))
         
-        # MATH AUDIT
         t_act_sum = sum(Decimal(str(e["act"])) for e in entries)
         t_tar_sum = sum(Decimal(str(e["tar"])) for e in entries)
         
-        m_actual = get_mult((t_act_sum / t_tar_sum * 100) if t_tar_sum > 0 else 0)
-        m_printed = get_mult((t_act_sum / t_sabc * 100) if t_sabc > 0 else 0)
+        mult_true = get_mult((t_act_sum / t_tar_sum * 100) if t_tar_sum > 0 else 0)
+        mult_sabc = get_mult((t_act_sum / t_sabc * 100) if t_sabc > 0 else 0)
         
         sc_res = {
-            1: run_scenario_calc(entries, m_stmt, PROFILES[selected_profile]["statement"], m_printed, 'absorbed'),
-            2: run_scenario_calc(entries, m_curr, PROFILES[selected_profile]["statement"], m_printed, 'absorbed'),
-            3: run_scenario_calc(entries, m_stmt, PROFILES[selected_profile]["policy"], m_actual, 'additive'),
-            4: run_scenario_calc(entries, m_2021, PROFILES[selected_profile]["policy"], m_actual, 'additive'),
-            5: run_scenario_calc(entries, m_curr, PROFILES[selected_profile]["policy"], m_actual, 'additive'),
-            7: run_scenario_calc(entries, m_curr, PROFILES[selected_profile]["statement"], m_actual, 'absorbed')
+            1: run_scenario_calc(entries, m_stmt, PROFILES[selected_profile]["statement"], mult_sabc, 'absorbed'),
+            2: run_scenario_calc(entries, m_curr, PROFILES[selected_profile]["statement"], mult_sabc, 'absorbed'),
+            3: run_scenario_calc(entries, m_stmt, PROFILES[selected_profile]["policy"], mult_true, 'additive'),
+            4: run_scenario_calc(entries, m_21, PROFILES[selected_profile]["policy"], mult_true, 'additive'),
+            5: run_scenario_calc(entries, m_curr, PROFILES[selected_profile]["policy"], mult_true, 'additive'),
+            7: run_scenario_calc(entries, m_curr, PROFILES[selected_profile]["statement"], mult_true, 'absorbed')
         }
 
-        full_rep = f"FORENSIC AUDIT: {st.session_state['emp_name']} | {st.session_state['period']}\n\n"
-        
         def add_block(title, res, mid_v, lbl):
-            b = f"--- {title} ---\nMIDPOINT: R {mid_v:,.2f} ({lbl})\n"
+            b = f"--- {title} ---\nMIDPOINT USED: R {mid_v:,.2f} ({lbl})\n"
             b += f"{'STREAM':<23} {'ACTUAL':>13} | {'TARGET':>13} | {'% ACH':>8} | {'COMMISSION':>13}\n" + "-"*81 + "\n"
             b += "\n".join(res['lines']) + "\n" + "-"*81 + "\n"
-            b += f"MULTIPLIER COMMISSION: R {res['m_pay']:>12,.2f}\nTOTAL PAYOUT: R {res['tot']:>12,.2f}\n\n"
+            b += f"MULTIPLIER COMMISSION: R {res['m_pay']:>12,.2f}\nTOTAL PAYOUT DUE: R {res['tot']:>12,.2f}\n\n"
             return b
 
-        if show_s[1]: full_rep += add_block("SCENARIO 1: SABC BASELINE", sc_res[1], m_stmt, "As Printed")
-        if show_s[2]: full_rep += add_block("SCENARIO 2: SABC WEIGHTS + CORRECT MIDPOINT", sc_res[2], m_curr, f"Scale {scale_c}")
-        if show_s[3]: full_rep += add_block("SCENARIO 3: POLICY WEIGHTS + STMT MIDPOINT", sc_res[3], m_stmt, "As Printed")
-        if show_s[4]: full_rep += add_block("SCENARIO 4: POLICY WEIGHTS + 2021 MIDPOINT", sc_res[4], m_2021, f"Scale {scale_h}")
-        if show_s[5]: full_rep += add_block("SCENARIO 5: POLICY WEIGHTS + CORRECT MIDPOINT", sc_res[5], m_curr, f"Scale {scale_c}")
-        
-        if show_s[7]:
-            gap = t_tar_sum - t_sabc
-            anom = f"!!! SAP SYSTEM ANOMALY: Total Target gap of R {abs(gap):,.2f} detected !!!\n" if abs(gap) > 10 else ""
-            full_rep += f"--- SCENARIO 7: SAP FINAL ANALYSIS ---\n{anom}"
-            full_rep += f"Calculated Total Segment Targets: R {t_tar_sum:,.2f}\n"
-            full_rep += add_block("FINAL CLEAN AUDIT (Correct Sum of Parts + Correct Scale)", sc_res[7], m_curr, f"Scale {scale_c}")
+        if up_rep_only:
+            rep = f"UNDERPAYMENT FORENSIC SUMMARY: {st.session_state['emp_name']} ({st.session_state['period']})\n"
+            rep += f"SABC Actual Payout:      R {sc_res[1]['tot']:,.2f}\n"
+            rep += f"Policy Correct Payout:   R {sc_res[2]['tot']:,.2f}\n"
+            rep += f"TOTAL UNDERPAYMENT DUE:  R {(sc_res[2]['tot']-sc_res[1]['tot']):,.2f}\n"
+        else:
+            full_rep = f"FORENSIC AUDIT: {st.session_state['emp_name']} | Personnel: {st.session_state['pers_num']} | Period: {st.session_state['period']}\n\n"
+            if sel[1]: full_rep += add_block("SCENARIO 1: SABC BASELINE", sc_res[1], m_stmt, "As Printed")
+            if sel[2]: full_rep += add_block("SCENARIO 2: SABC + CORRECT MIDPOINT", sc_res[2], m_curr, f"Scale {scale_c}")
+            if sel[3]: full_rep += add_block("SCENARIO 3: POLICY + STMT MIDPOINT", sc_res[3], m_stmt, "As Printed")
+            if sel[4]: full_rep += add_block("SCENARIO 4: POLICY + 2021 MIDPOINT", sc_res[4], m_21, f"Scale {scale_h}")
+            if sel[5]: full_rep += add_block("SCENARIO 5: POLICY + CORRECT MIDPOINT", sc_res[5], m_curr, f"Scale {scale_c}")
+            
+            if sel[7]:
+                gap = t_tar_sum - t_sabc
+                anom = f"!!! SAP SYSTEM ANOMALY: Total Target gap of R {abs(gap):,.2f} detected !!!\n" if abs(gap) > 10 else ""
+                full_rep += f"--- SCENARIO 7: SAP FINAL ANALYSIS ---\n{anom}"
+                full_rep += f"Sum of extracted Segment Targets: R {t_tar_sum:,.2f} (versus SABC Declared R {t_sabc:,.2f})\n"
+                full_rep += add_block("FINAL CLEAN AUDIT (Correct Math + Correct Scale)", sc_res[7], m_curr, f"Scale {scale_c}")
+            rep = full_rep
 
-        st.code(full_rep)
-        pdf = FPDF(); pdf.add_page(); pdf.set_font("Courier", size=7); pdf.multi_cell(0, 3.5, full_rep.encode('latin-1','replace').decode('latin-1'))
-        st.download_button("Download PDF", pdf.output(dest='S').encode('latin-1'), file_name=f"{st.session_state['emp_name']}_Audit.pdf")
+        st.code(rep)
+        pdf = FPDF(); pdf.add_page(); pdf.set_font("Courier", size=7); pdf.multi_cell(0, 3.5, rep.encode('latin-1','replace').decode('latin-1'))
+        fname = f"{st.session_state['emp_name'].replace(' ','_')}_{st.session_state['period'].replace(' ','_')}_UNDERPAID.pdf"
+        st.download_button("📄 Download Final Audit PDF", pdf.output(dest='S').encode('latin-1'), file_name=fname, mime="application/pdf")
