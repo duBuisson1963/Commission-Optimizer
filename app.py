@@ -7,7 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from fpdf import FPDF
 from datetime import datetime
 
-# --- PROFILE WEIGHTS ---
+# --- SETTINGS & SCALES ---
 PROFILES = {
     "Standard AE / SMME": {
         "statement": {"Radio Classic": 45.0, "TV Classic": 24.0, "TV Sponsorship": 6.0, "Radio Sponsorship": 15.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5},
@@ -21,10 +21,8 @@ PROFILES = {
     }
 }
 
-# --- SALARY SCALES ---
 MIDPOINTS_2021 = {'110A': 3310313, '110B': 2648250, '115A': 2118600, '115B': 1765500, '120': 1650000, '125': 1175508, '130': 904237, '300': 459910, '401': 416379, '402': 327316, '403': 254447, '404': 199286, '405': 153057, '406': 135132, '407': 100704, '408': 71634}
 MIDPOINTS_CURRENT = {'110A': 3459277, '110': 3182534, '110B': 2767421, '115': 2546028, '115A': 2213937, '115B': 1844948, '120': 1724250, '125A': 1412667, '125': 1228406, '130A': 1091391, '130B': 1039420, '130': 944928, '300': 480606, '401': 435116, '402B': 394241, '402': 342045, '403': 265897, '404': 208254, '405': 159945, '405A': 141872, '406B': 122336}
-
 ALL_SEGMENTS = ["Digital", "Radio Classic", "Radio Sponsorship", "Radio Sport Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship"]
 
 def get_mult(score):
@@ -35,88 +33,29 @@ def get_mult(score):
     if score <= 180: return Decimal('4.10')
     return Decimal('6.20')
 
-def run_scenario(entries, mid, w_map, m_pay, logic_type):
+def run_scenario_calc(entries, midpoint, weights, multiplier_val, mode):
     lines, sum_seg = [], Decimal('0')
     for e in entries:
         a, t = Decimal(str(e["act"])), Decimal(str(e["tar"]))
-        w = Decimal(str(w_map.get(e["name"], 0))) / 100
-        if w == Decimal('0'): continue
-        ach = a / t if t > 0 else Decimal('0')
-        sc = (mid * w) if ach >= 1.0 else Decimal('0')
+        w = Decimal(str(weights.get(e["name"], 0))) / 100
+        if w == 0: continue
+        ach = (a / t) if t > 0 else Decimal('0')
+        sc = (midpoint * w) if ach >= 1.0 else Decimal('0')
         sum_seg += sc
         lines.append(f"{e['name']:<23} R{a:>11,.2f} | R{t:>11,.2f} | {ach*100:>7.1f}% | R{sc:>11,.2f}")
-    total = max(sum_seg, m_pay) if logic_type == 'absorbed' else sum_seg + m_pay
-    return {"lines": lines, "sum_seg": sum_seg, "tot": total}
+    
+    m_payout = (midpoint * multiplier_val).quantize(Decimal('0.01'), ROUND_HALF_UP)
+    final = max(sum_seg, m_payout) if mode == 'absorbed' else sum_seg + m_payout
+    return {"lines": lines, "sum_seg": sum_seg, "m_pay": m_payout, "tot": final}
 
-# --- ALTERNATIVE LOGIC ---
-def run_alt_sports_with_digital(entries, target_commission):
-    lines = []
-    act_tv = next((Decimal(str(e["act"])) for e in entries if e["name"] == "TV Sport Sponsorship"), Decimal('0'))
-    tar_tv = next((Decimal(str(e["tar"])) for e in entries if e["name"] == "TV Sport Sponsorship"), Decimal('1'))
-    act_rad = next((Decimal(str(e["act"])) for e in entries if e["name"] == "Radio Sport Sponsorship"), Decimal('0'))
-    tar_rad = next((Decimal(str(e["tar"])) for e in entries if e["name"] == "Radio Sport Sponsorship"), Decimal('1'))
-    act_dig = next((Decimal(str(e["act"])) for e in entries if e["name"] == "Digital"), Decimal('0'))
-    tar_dig = next((Decimal(str(e["tar"])) for e in entries if e["name"] == "Digital"), Decimal('1'))
-    pct_tv, pct_rad, pct_dig = (act_tv/tar_tv)*100, (act_rad/tar_rad)*100, (act_dig/tar_dig)*100
-    lines.append(f"{'TV Sport Sponsorship':<23} R{act_tv:>11,.2f} | R{tar_tv:>11,.2f} | {pct_tv:>7.1f}% |   (Pooled)")
-    lines.append(f"{'Radio Sport Sponsorship':<23} R{act_rad:>11,.2f} | R{tar_rad:>11,.2f} | {pct_rad:>7.1f}% |   (Pooled)")
-    lines.append(f"{'Digital':<23} R{act_dig:>11,.2f} | R{tar_dig:>11,.2f} | {pct_dig:>7.1f}% |   (Pooled)")
-    ach_count = int(pct_tv >= 100) + int(pct_rad >= 100)
-    if ach_count == 0: return Decimal('0'), "MODE C (No Sport Targets Hit)", "0.00x", lines
-    elif ach_count == 1:
-        if pct_tv >= 100: return target_commission * Decimal('0.60'), "MODE B (TV Fallback)", "Fallback (60%)", lines
-        else: return target_commission * Decimal('0.30'), "MODE B (Radio Fallback)", "Fallback (30%)", lines
-    else:
-        weighted_pct = (Decimal('0.60') * min(pct_tv, 180)) + (Decimal('0.30') * min(pct_rad, 180)) + (Decimal('0.10') * min(pct_dig, 180))
-        m = get_mult(weighted_pct)
-        return target_commission * m, f"MODE A (Weighted {weighted_pct:.1f}%)", f"{m}x", lines
-
-def run_alt_sports_exclude_digital(entries, target_commission):
-    lines = []
-    act_tv = next((Decimal(str(e["act"])) for e in entries if e["name"] == "TV Sport Sponsorship"), Decimal('0'))
-    tar_tv = next((Decimal(str(e["tar"])) for e in entries if e["name"] == "TV Sport Sponsorship"), Decimal('1'))
-    act_rad = next((Decimal(str(e["act"])) for e in entries if e["name"] == "Radio Sport Sponsorship"), Decimal('0'))
-    tar_rad = next((Decimal(str(e["tar"])) for e in entries if e["name"] == "Radio Sport Sponsorship"), Decimal('1'))
-    pct_tv, pct_rad = (act_tv/tar_tv)*100, (act_rad/tar_rad)*100
-    lines.append(f"{'TV Sport Sponsorship':<23} R{act_tv:>11,.2f} | R{tar_tv:>11,.2f} | {pct_tv:>7.1f}% |   (Pooled)")
-    lines.append(f"{'Radio Sport Sponsorship':<23} R{act_rad:>11,.2f} | R{tar_rad:>11,.2f} | {pct_rad:>7.1f}% |   (Pooled)")
-    lines.append(f"{'Digital (EXCLUDED)':<23} R{0:>11,.2f} | R{0:>11,.2f} | {0:>7.1f}% |   (Ignored)")
-    ach_count = int(pct_tv >= 100) + int(pct_rad >= 100)
-    if ach_count == 0: return Decimal('0'), "MODE C", "0.00x", lines
-    elif ach_count == 1:
-        if pct_tv >= 100: return target_commission * Decimal('0.60'), "MODE B (TV)", "60%", lines
-        else: return target_commission * Decimal('0.30'), "MODE B (Radio)", "30%", lines
-    else:
-        weighted_pct = ((Decimal('0.60') * min(pct_tv, 180)) + (Decimal('0.30') * min(pct_rad, 180))) / Decimal('0.90')
-        m = get_mult(weighted_pct)
-        return target_commission * m, f"MODE A (Weighted {weighted_pct:.1f}%)", f"{m}x", lines
-
-def run_alternative_smme_logic(entries, target_commission, mid_to_use):
-    lines = []
-    nd = ["Radio Classic", "Radio Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship", "Radio Sport Sponsorship"]
-    t_act = sum(Decimal(str(e["act"])) for e in entries if e["name"] in nd)
-    t_tar = sum(Decimal(str(e["tar"])) for e in entries if e["name"] in nd)
-    ovr = (t_act / t_tar * 100) if t_tar > 0 else Decimal('0')
-    cw = {"Radio Classic": Decimal('0.45'), "Radio Sponsorship": Decimal('0.15'), "TV Classic": Decimal('0.24'), "TV Sponsorship": Decimal('0.06'), "TV Sport Sponsorship": Decimal('0.025'), "Radio Sport Sponsorship": Decimal('0.025'), "Digital": Decimal('0.05')}
-    comm = Decimal('0')
-    for e in entries:
-        p = (Decimal(str(e["act"]))/Decimal(str(e["tar"]))*100) if Decimal(str(e["tar"]))>0 else 0
-        sc = target_commission * cw.get(e["name"], 0) if (ovr < 100 and p >= 100) else 0
-        comm += sc
-        lines.append(f"{e['name']:<23} R{e['act']:>11,.2f} | R{e['tar']:>11,.2f} | {p:>7.1f}% | R{sc:>11,.2f}")
-    if ovr < 100: return comm, f"Sub-100% Logic ({ovr:.1f}%)", "No Mult", lines
-    m = get_mult(ovr); return target_commission * m, f"Mult Triggered ({ovr:.1f}%)", f"{m}x", lines
-
-# --- ENGINE ---
+# --- PARSING ---
 def parse_sabc_number(num_str):
     if not num_str: return 0.0
     num_str = str(num_str).strip().replace(' ', '')
     is_neg = num_str.startswith('-')
     parts = num_str.split('.')
     if len(parts) > 1:
-        integer = re.sub(r'\D', '', ''.join(parts[:-1]))
-        decimal = re.sub(r'\D', '', parts[-1])
-        f_str = f"{integer}.{decimal}"
+        f_str = f"{re.sub(r'\D', '', ''.join(parts[:-1]))}.{re.sub(r'\D', '', parts[-1])}"
     else: f_str = re.sub(r'\D', '', num_str)
     val = float(f_str) if f_str else 0.0
     return -val if is_neg else val
@@ -159,37 +98,36 @@ def parse_period_sort(p):
 st.set_page_config(page_title="BEMAWU Forensic Audit", layout="wide")
 st.title("BEMAWU Dual-Profile Forensic Simulator")
 
-if "emp_name" not in st.session_state: st.session_state["emp_name"] = ""
-if "pers_num" not in st.session_state: st.session_state["pers_num"] = ""
-if "period" not in st.session_state: st.session_state["period"] = ""
+st.sidebar.header("Scenario Selection")
+show_s1 = st.sidebar.checkbox("Scenario 1: SABC Statement (Baseline)", True)
+show_s2 = st.sidebar.checkbox("Scenario 2: SABC Weights (Current Midpoint)", True)
+show_s3 = st.sidebar.checkbox("Scenario 3: Policy Weights (Stmt Midpoint)", True)
+show_s4 = st.sidebar.checkbox("Scenario 4: Policy Weights (2021 Midpoint)", True)
+show_s5 = st.sidebar.checkbox("Scenario 5: Policy Weights (Current Midpoint)", True)
+show_s6 = st.sidebar.checkbox("Scenario 6: Alternative Logic (Special Interest)", True)
+show_s7 = st.sidebar.checkbox("Scenario 7: SAP Final Analysis (Anomaly Report)", True)
 
-ct1, ct2 = st.columns(2)
-with ct1: selected_profile = st.radio("Select AE Profile / Category:", ["Standard AE / SMME", "Sports PM"], horizontal=True)
-with ct2:
-    analysis_mode = st.radio("Analysis Mode:", ["Single Statement", "Bulk Statements (Underpayment Summary)"], horizontal=True)
-    if analysis_mode == "Single Statement": underpayment_only = st.checkbox("Underpayment Report Only?")
-
+col_t1, col_t2 = st.columns(2)
+with col_t1: selected_profile = st.radio("Select Profile:", ["Standard AE / SMME", "Sports PM"], horizontal=True)
+with col_t2: 
+    mode = st.radio("Mode:", ["Single Statement", "Bulk Statements"], horizontal=True)
+    if mode == "Single Statement": up_only = st.checkbox("Underpayment Summary Only?")
 st.divider()
 
 # --- BULK MODE ---
-if analysis_mode == "Bulk Statements (Underpayment Summary)":
-    uploaded_files = st.file_uploader("Upload all Statements", type=['pdf', 'csv'], accept_multiple_files=True)
-    if uploaded_files:
-        if not st.session_state["emp_name"]:
-            for f in uploaded_files:
-                f.seek(0); d = extract_file_data(f)
-                if d["emp_name"]: st.session_state["emp_name"], st.session_state["pers_num"] = d["emp_name"], d["pers_num"]
-                if st.session_state["emp_name"]: break
+if mode == "Bulk Statements":
+    st.subheader("Bulk Underpayment Compiler")
+    up_files = st.file_uploader("Upload Statements", type=['pdf','csv'], accept_multiple_files=True)
     col_e1, col_e2, col_e3 = st.columns(3)
     col_e1.text_input("Employee Name:", key="emp_name")
     col_e2.text_input("Personnel Number:", key="pers_num")
     col_e3.text_input("Period (Optional):", key="period")
-    scale_curr = st.selectbox("Current Midpoint (Scale):", list(MIDPOINTS_CURRENT.keys()))
+    scale_curr = st.selectbox("Current Scale:", list(MIDPOINTS_CURRENT.keys()), key="bulk_scale")
     
-    if st.button("RUN BULK REPORT", type="primary", use_container_width=True) and uploaded_files:
+    if st.button("RUN BULK REPORT", type="primary", use_container_width=True) and up_files:
         mid_c = (Decimal(str(MIDPOINTS_CURRENT[scale_curr])) / 12).quantize(Decimal('0.01'), ROUND_HALF_UP)
         bulk_res, total_up = [], Decimal('0')
-        for f in uploaded_files:
+        for f in up_files:
             f.seek(0); d = extract_file_data(f); ents = []
             for s in ALL_SEGMENTS:
                 a, t = d["segments"][s]["act"], d["segments"][s]["tar"]
@@ -199,19 +137,18 @@ if analysis_mode == "Bulk Statements (Underpayment Summary)":
             if ms == 0: ms = mid_c
             ta, tt = sum(Decimal(str(e["act"])) for e in ents), sum(Decimal(str(e["tar"])) for e in ents)
             m = get_mult((ta/tt*100) if tt>0 else 0)
-            res_s = run_scenario(ents, ms, PROFILES[selected_profile]["statement"], ms*m, 'absorbed')
-            res_c = run_scenario(ents, mid_c, PROFILES[selected_profile]["statement"], mid_c*m, 'absorbed')
+            res_s = run_scenario_calc(ents, ms, PROFILES[selected_profile]["statement"], m, 'absorbed')
+            res_c = run_scenario_calc(ents, mid_c, PROFILES[selected_profile]["statement"], m, 'absorbed')
             diff = res_c['tot'] - res_s['tot']; total_up += diff
             bulk_res.append({"per": d["period"] or "Unknown", "ms": ms, "cs": res_s['tot'], "mc": mid_c, "cc": res_c['tot'], "df": diff})
         bulk_res.sort(key=lambda x: parse_period_sort(x["per"]))
-        rep = f"FORENSIC ANALYSIS: UNDERPAYMENT DUE TO WRONG MIDPOINT\nEMPLOYEE: {st.session_state['emp_name']}\n\n"
+        rep = f"BULK UNDERPAYMENT REPORT\nEMPLOYEE: {st.session_state['emp_name']}\n\n"
         rep += f"{'PERIOD':<18} | {'STMT MID':>12} | {'STMT COM':>12} | {'CURR MID':>12} | {'CURR COM':>12} | {'DIFF':>12}\n" + "-"*95 + "\n"
         for r in bulk_res: rep += f"{r['per']:<18} | R{r['ms']:>11,.2f} | R{r['cs']:>11,.2f} | R{r['mc']:>11,.2f} | R{r['cc']:>11,.2f} | R{r['df']:>11,.2f}\n"
-        rep += "-"*95 + "\n" + f"{'TOTAL UNDERPAYMENT:':<80} R {total_up:>11,.2f}"
-        st.code(rep, language="text")
+        rep += "-"*95 + "\nTOTAL UNDERPAYMENT: R " + f"{total_up:,.2f}"
+        st.code(rep); fname = f"{st.session_state['emp_name'].replace(' ','_')}_Bulk_Audit.pdf"
         pdf = FPDF(); pdf.add_page(); pdf.set_font("Courier", size=8); pdf.multi_cell(0,4,rep.encode('latin-1','replace').decode('latin-1'))
-        fname = f"{st.session_state['emp_name'].replace(' ','_')}_Bulk_UNDERPAID.pdf"
-        st.download_button("📄 Download Bulk PDF", pdf.output(dest='S').encode('latin-1'), file_name=fname, mime="application/pdf")
+        st.download_button("Download PDF", pdf.output(dest='S').encode('latin-1'), file_name=fname)
 
 # --- SINGLE MODE ---
 else:
@@ -226,11 +163,12 @@ else:
         for s in ALL_SEGMENTS: st.session_state[f"act_{s}"], st.session_state[f"tar_{s}"] = d["segments"][s]["act"], d["segments"][s]["tar"]
     col_e1, col_e2, col_e3 = st.columns(3)
     col_e1.text_input("Name:", key="emp_name"); col_e2.text_input("Pers No:", key="pers_num"); col_e3.text_input("Period:", key="period")
-    col1, col2 = st.columns([1, 2])
-    mid_in = col1.text_input("Stmt Midpoint:", key="midpoint_input_val")
-    sabc_t = col1.text_input("SABC Declared Target:", key="sabc_target_default")
-    scale_curr = col1.selectbox("Current Midpoint (Scale):", list(MIDPOINTS_CURRENT.keys()))
-    scale_2021 = col1.selectbox("2021 Midpoint:", list(MIDPOINTS_2021.keys()))
+    col_i1, col_i2 = st.columns([1, 2])
+    with col_i1:
+        mid_in = st.text_input("Statement Midpoint:", key="midpoint_input_val")
+        sabc_t = st.text_input("SABC Declared Target (from PDF bottom):", key="sabc_target_default")
+        scale_c = st.selectbox("Current Scale:", list(MIDPOINTS_CURRENT.keys()), key="sc_c")
+        scale_h = st.selectbox("2021 Scale:", list(MIDPOINTS_2021.keys()), key="sc_h")
     
     vis = ["Digital", "Radio Sport Sponsorship", "TV Sport Sponsorship"] if selected_profile == "Sports PM" else ALL_SEGMENTS
     entries = []
@@ -244,49 +182,61 @@ else:
     for s in ALL_SEGMENTS:
         if s not in vis: entries.append({"name": s, "act": st.session_state[f"act_{s}"], "tar": st.session_state[f"tar_{s}"]})
 
-    if st.button("RUN FORENSIC COMPARISON", type="primary", use_container_width=True):
-        mid_m = Decimal(str(mid_in).replace(',',''))
-        mid_c = (Decimal(str(MIDPOINTS_CURRENT[scale_curr])) / 12).quantize(Decimal('0.01'), ROUND_HALF_UP)
-        mid_21 = (Decimal(str(MIDPOINTS_2021[scale_2021])) / 12).quantize(Decimal('0.01'), ROUND_HALF_UP)
-        ta, tt = sum(Decimal(str(e["act"])) for e in entries), sum(Decimal(str(e["tar"])) for e in entries)
-        rev_ach = (ta / tt * 100).quantize(Decimal('0.01')) if tt > 0 else Decimal('0')
-        m = get_mult(rev_ach)
+    if st.button("RUN SCENARIO AUDIT", type="primary", use_container_width=True):
+        m_stmt = Decimal(str(mid_in).replace(',',''))
+        m_curr = (Decimal(str(MIDPOINTS_CURRENT[scale_c])) / 12).quantize(Decimal('0.01'), ROUND_HALF_UP)
+        m_2021 = (Decimal(str(MIDPOINTS_2021[scale_h])) / 12).quantize(Decimal('0.01'), ROUND_HALF_UP)
         
-        m_pay_m, m_pay_c = mid_m * m, mid_c * m
-        res_m = run_scenario(entries, mid_m, PROFILES[selected_profile]["statement"], m_pay_m, 'absorbed')
-        res_c = run_scenario(entries, mid_c, PROFILES[selected_profile]["statement"], m_pay_c, 'absorbed')
+        t_act = sum(Decimal(str(e["act"])) for e in entries)
+        t_tar_sum = sum(Decimal(str(e["tar"])) for e in entries)
+        t_sabc = Decimal(str(sabc_t).replace(',',''))
         
-        if underpayment_only:
-            rep = f"UNDERPAYMENT REPORT: {st.session_state['emp_name']} ({st.session_state['period']})\n"
-            rep += f"SABC Payout: R{res_m['tot']:,.2f} | Correct Payout: R{res_c['tot']:,.2f}\n"
-            rep += f"UNDERPAYMENT: R{(res_c['tot']-res_m['tot']):,.2f}"
+        # Multipliers
+        mult_true = get_mult((t_act / t_tar_sum * 100) if t_tar_sum > 0 else 0)
+        mult_sabc = get_mult((t_act / t_sabc * 100) if t_sabc > 0 else 0)
+        
+        # Scenarios
+        s1 = run_scenario_calc(entries, m_stmt, PROFILES[selected_profile]["statement"], mult_sabc, 'absorbed')
+        s2 = run_scenario_calc(entries, m_curr, PROFILES[selected_profile]["statement"], mult_sabc, 'absorbed')
+        s3 = run_scenario_calc(entries, m_stmt, PROFILES[selected_profile]["policy"], mult_true, 'additive')
+        s4 = run_scenario_calc(entries, m_2021, PROFILES[selected_profile]["policy"], mult_true, 'additive')
+        s5 = run_scenario_calc(entries, m_curr, PROFILES[selected_profile]["policy"], mult_true, 'additive')
+        
+        # Special Logic (S6)
+        if selected_profile == "Sports PM":
+            s6_val, s6_mode, s6_m, s6_lines = run_alt_sports_with_digital(entries, m_stmt)
+            s6_title = "SCENARIO 6: ALT CALC (WITH DIGITAL)"
         else:
-            # RESTORED 7-SCENARIO LOGIC
-            pol_m = run_scenario(entries, mid_m, PROFILES[selected_profile]["policy"], m_pay_m, 'additive')
-            pol_21 = run_scenario(entries, mid_21, PROFILES[selected_profile]["policy"], mid_21*m, 'additive')
-            pol_c = run_scenario(entries, mid_c, PROFILES[selected_profile]["policy"], mid_c*m, 'additive')
-            if selected_profile == "Sports PM":
-                alt_6_val, alt_6_mode, alt_6_m, alt_6_lines = run_alt_sports_with_digital(entries, mid_m)
-                alt_7_val, alt_7_mode, alt_7_m, alt_7_lines = run_alt_sports_exclude_digital(entries, mid_m)
-            else:
-                alt_6_val, alt_6_mode, alt_6_m, alt_6_lines = run_alternative_smme_logic(entries, mid_m, mid_m)
-                alt_7_val, alt_7_mode, alt_7_m, alt_7_lines = run_alternative_smme_logic(entries, mid_c, mid_c)
-            
-            s_t = Decimal(str(sabc_t).replace(',',''))
-            gap = tt - s_t
-            warn = f"!!! SAP ANOMALY: Target manipulated by R{abs(gap):,.2f} !!!\n" if abs(gap)>10 else ""
-            
-            rep = f"FORENSIC REPORT: {st.session_state['emp_name']} | {st.session_state['period']}\n{warn}\n"
-            rep += f"SCENARIO 1 (Stmt Mid): R {res_m['tot']:>12,.2f}\n"
-            rep += f"SCENARIO 2 (Curr Mid): R {res_c['tot']:>12,.2f}\n"
-            rep += f"SCENARIO 3 (Policy):   R {pol_m['tot']:>12,.2f}\n"
-            rep += f"SCENARIO 4 (2021):     R {pol_21['tot']:>12,.2f}\n"
-            rep += f"SCENARIO 5 (Policy C): R {pol_c['tot']:>12,.2f}\n"
-            rep += f"SCENARIO 6 (Alt A):    R {alt_6_val:>12,.2f}\n"
-            rep += f"SCENARIO 7 (SAP Final Analysis): R {alt_7_val:>12,.2f}\n"
-            rep += f"\nUNDERPAYMENT: R {(res_c['tot'] - res_m['tot']):,.2f}"
+            s6_val, s6_mode, s6_m, s6_lines = run_alternative_smme_logic(entries, m_stmt, m_stmt)
+            s6_title = "SCENARIO 6: ALT CALC (SUB-100% CHECK)"
 
-        st.code(rep, language="text")
-        pdf = FPDF(); pdf.add_page(); pdf.set_font("Courier", size=8); pdf.multi_cell(0,4,rep.encode('latin-1','replace').decode('latin-1'))
-        fname = f"{st.session_state['emp_name'].replace(' ','_')}_{st.session_state['period'].replace(' ','_')}_UNDERPAID.pdf"
-        st.download_button("📄 Download PDF", pdf.output(dest='S').encode('latin-1'), file_name=fname, mime="application/pdf")
+        # SAP Anomaly Analysis (S7)
+        s7 = run_scenario_calc(entries, m_curr, PROFILES[selected_profile]["statement"], mult_true, 'absorbed')
+        gap = t_tar_sum - t_sabc
+        gap_msg = f"!!! SAP ANOMALY: Target gap of R{abs(gap):,.2f} detected (Manipulation) !!!" if abs(gap) > 10 else "SAP Math Check: Consistent."
+
+        def fmt_block(title, res, mid, label):
+            b = f"--- {title} ---\nMIDPOINT: R {mid:,.2f} ({label})\n"
+            b += f"{'STREAM':<23} {'ACTUAL':>13} | {'TARGET':>13} | {'% ACH':>8} | {'COMMISSION':>13}\n" + "-"*81 + "\n"
+            b += "\n".join(res['lines']) + "\n" + "-"*81 + "\n"
+            b += f"{'MULTIPLIER COMMISSION:':<35} R {res['m_pay']:>12,.2f}\n{'TOTAL PAYOUT:':<35} R {res['tot']:>12,.2f}\n\n"
+            return b
+
+        full_rep = f"FORENSIC REPORT: {st.session_state['emp_name']} ({st.session_state['period']})\n\n"
+        if show_s1: full_rep += fmt_block("SCENARIO 1: SABC STATEMENT BASELINE", s1, m_stmt, "As Printed")
+        if show_s2: full_rep += fmt_block("SCENARIO 2: SABC WEIGHTS (CORRECT MIDPOINT)", s2, m_curr, f"Scale {scale_c}")
+        if show_s3: full_rep += fmt_block("SCENARIO 3: POLICY WEIGHTS (STMT MIDPOINT)", s3, m_stmt, "As Printed")
+        if show_s4: full_rep += fmt_block("SCENARIO 4: POLICY WEIGHTS (2021 MIDPOINT)", s4, m_2021, f"Scale {scale_h}")
+        if show_s5: full_rep += fmt_block("SCENARIO 5: POLICY WEIGHTS (CORRECT MIDPOINT)", s5, m_curr, f"Scale {scale_c}")
+        if show_s6:
+            full_rep += f"--- {s6_title} ---\nLogic: {s6_mode}\n"
+            full_rep += f"{'STREAM':<23} {'ACTUAL':>13} | {'TARGET':>13} | {'% ACH':>8} | {'COMMISSION':>13}\n" + "-"*81 + "\n"
+            full_rep += "\n".join(s6_lines) + "\n" + "-"*81 + "\n"
+            full_rep += f"FINAL Payout: R {s6_val:,.2f}\n\n"
+        if show_s7:
+            full_rep += f"--- SCENARIO 7: SAP FINAL ANALYSIS ---\n{gap_msg}\n"
+            full_rep += fmt_block("FINAL CLEAN AUDIT", s7, m_curr, "Correct Logic + Correct Scale")
+
+        st.code(full_rep)
+        pdf = FPDF(); pdf.add_page(); pdf.set_font("Courier", size=7); pdf.multi_cell(0, 3.5, full_rep.encode('latin-1','replace').decode('latin-1'))
+        st.download_button("Download Full Audit PDF", pdf.output(dest='S').encode('latin-1'), file_name=f"{st.session_state['emp_name']}_Forensic.pdf")
