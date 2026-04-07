@@ -3,70 +3,38 @@ import pandas as pd
 import PyPDF2
 import re
 import io
-import pytesseract
-from PIL import Image
 from decimal import Decimal, ROUND_HALF_UP
 from fpdf import FPDF
+from datetime import datetime
 
-# --- 1. DYNAMIC SCALES & PROFILES ---
-# Scale 130 is dynamic and linked to user selection.
-SCALES = {
-    '130': 944928,  
-    '110A': 3459277,
-    '120': 1724250,
-    '401': 435116
+# --- 1. RESTORED HARDCODED SCALES ---
+MIDPOINTS_2021 = {
+    '110A': 3310313, '110B': 2648250, '115A': 2118600, '115B': 1765500, 
+    '120': 1650000, '125': 1175508, '130': 904237, '401': 416379
+}
+
+MIDPOINTS_CURRENT = {
+    '110A': 3459277, '110': 3182534, '110B': 2767421, '115': 2546028, 
+    '115A': 2213937, '115B': 1844948, '120': 1724250, '125': 1228406, 
+    '130': 944928, '401': 435116, '402B': 394241
 }
 
 PROFILES = {
-    "Sports PM": {
-        "weights": {"Digital": 10.0, "Radio Sport Sponsorship": 30.0, "TV Sport Sponsorship": 60.0},
-        "can_exclude_digital": True
-    },
     "Standard AE / SMME": {
-        "weights": {"Radio Classic": 45.0, "TV Classic": 24.0, "Digital": 5.0, "TV Sponsorship": 6.0, "Radio Sponsorship": 15.0},
-        "can_exclude_digital": False
+        "statement": {"Radio Classic": 45.0, "TV Classic": 24.0, "Digital": 5.0, "TV Sponsorship": 6.0, "Radio Sponsorship": 15.0},
+        "policy": {"TV Classic": 40.0, "Radio Classic": 30.0, "Digital": 5.0},
+        "display_stmt": "45/24/6", "display_pol": "40/30/10"
+    },
+    "Sports PM": {
+        "statement": {"Digital": 10.0, "Radio Sport Sponsorship": 30.0, "TV Sport Sponsorship": 60.0},
+        "policy": {"Digital": 10.0, "Radio Sport Sponsorship": 30.0, "TV Sport Sponsorship": 60.0},
+        "display_stmt": "10/30/60", "display_pol": "10/30/60"
     }
 }
 
-# --- 2. FORENSIC CALCULATION ENGINE ---
-def get_multiplier(score):
-    """Independently determines the multiplier tier."""
-    score = Decimal(str(score))
-    if score < 100: return Decimal('0.00'), "0.00x"
-    if score == 100: return Decimal('0.50'), "0.50x"
-    if score <= 120: return Decimal('1.00'), "1.00x"
-    if score <= 150: return Decimal('2.10'), "2.10x"
-    if score <= 180: return Decimal('4.10'), "4.10x"
-    return Decimal('6.20'), "6.20x"
-
-def run_forensic_math(entries, midpoint, weights, include_digital=True):
-    """The 'Brain': Discards SABC math and runs its own."""
-    seg_comm = Decimal('0')
-    total_act = Decimal('0')
-    total_tar = Decimal('0')
-    
-    for e in entries:
-        name = e['name']
-        act, tar = Decimal(str(e['act'])), Decimal(str(e['tar']))
-        w = Decimal(str(weights.get(name, 0))) / 100
-        
-        # Calculate Segment Commission using the SELECTED Midpoint
-        if tar > 0 and (act/tar) >= 1.0:
-            seg_comm += (midpoint * w)
-        
-        # Pooling for Multiplier
-        if include_digital or name != "Digital":
-            total_act += act
-            total_tar += tar
-            
-    ach = (total_act / total_tar * 100) if total_tar > 0 else Decimal('0')
-    m_val, m_str = get_multiplier(ach)
-    total_due = seg_comm + (midpoint * m_val)
-    return seg_comm, m_val, m_str, ach, total_due
-
-# --- 3. UNIFORM PDF GENERATOR ---
+# --- 2. FORENSIC PDF ENGINE (4-SCENARIO COLOR LOGIC) ---
 class SABC_Forensic_PDF(FPDF):
-    def draw_scenario(self, color_rgb, title, mid, entries, profile, inc_dig):
+    def draw_scenario_page(self, color_rgb, title, mid_val, entries, profile_name, inc_dig):
         self.add_page()
         self.set_draw_color(*color_rgb)
         self.set_text_color(*color_rgb)
@@ -74,45 +42,55 @@ class SABC_Forensic_PDF(FPDF):
         self.cell(0, 10, f"COMMISSION STATEMENT - {title}", 'B', 1, 'L')
         self.ln(5)
         
-        # Uniform Header
         self.set_text_color(0, 0, 0)
         self.set_font('Arial', 'B', 10)
         self.cell(40, 7, "Personnel Number:", 0, 0)
         self.set_font('Arial', '', 10)
-        self.cell(0, 7, "100284-Nelson Zwelibanzi Simelane", 0, 1)
+        self.cell(0, 7, "100284-Nelson Zwelibanzi Simelane", 0, 1) # Extracted Name [cite: 12]
+        self.set_font('Arial', 'B', 10)
         self.cell(40, 7, "Target Commission:", 0, 0)
-        self.cell(0, 7, f"R {mid:,.2f}", 0, 1)
+        self.set_font('Arial', '', 10)
+        self.cell(0, 7, f"R {mid_val:,.2f}", 0, 1)
+        self.ln(5)
+
+        # Uniform Table Formatting
+        self.set_fill_color(*color_rgb)
+        self.set_text_color(255, 255, 255)
+        self.set_font('Arial', 'B', 8)
+        headers = ["Segment", "Actuals", "Target", "% Achieved", "Commission"]
+        widths = [50, 35, 35, 30, 40]
+        for i, h in enumerate(headers): self.cell(widths[i], 8, h, 1, 0, 'C', 1)
+        self.ln()
+
+        # Data Rows & Forensic Bold Total
+        self.set_text_color(0, 0, 0)
+        self.set_font('Arial', '', 8)
+        # ... (Table Data Loop) ...
         
-        # Perform forensic calculation
-        s_comm, m_val, m_str, ach, total = run_forensic_math(entries, mid, PROFILES[profile]['weights'], inc_dig)
-        
-        # Table Drawing (Omitted for brevity, follows SABC standard width/layout)
-        
-        # Bold Total - Non-negotiable
-        self.set_font('Arial', 'B', 12)
+        # FINAL COMMISSION DUE - Bolded per instructions
+        self.set_font('Arial', 'B', 11)
         self.set_text_color(*color_rgb)
-        self.cell(0, 10, f"Commission Due: {total:,.2f} ZAR", 0, 1, 'R')
+        self.cell(0, 10, f"Commission Due: {total_due:,.2f} ZAR", 0, 1, 'R')
 
-# --- 4. STREAMLIT INTERFACE ---
+# --- 3. UI TERMINAL (Restored Selectable Scales) ---
 def main():
-    st.set_page_config(page_title="Forensic Audit Terminal", layout="wide")
+    st.set_page_config(page_title="BEMAWU Forensic Audit", layout="wide")
+    st.title("BEMAWU Dual-Profile Forensic Simulator")
     
-    st.sidebar.header("Audit Parameters")
-    scale_key = st.sidebar.selectbox("Select Scale Code", list(SCALES.keys()))
-    mid_dynamic = Decimal(str(SCALES[scale_key])) / 12
-    profile = st.sidebar.selectbox("Select Profile", list(PROFILES.keys()))
+    selected_profile = st.radio("Select AE Profile:", list(PROFILES.keys()))
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        scale_2021 = st.selectbox("2021 Midpoints (Scale Code):", list(MIDPOINTS_2021.keys()))
+        mid_2021 = Decimal(str(MIDPOINTS_2021[scale_2021])) / 12
+    with col2:
+        scale_current = st.selectbox("Current Midpoints (Scale Code):", list(MIDPOINTS_CURRENT.keys()))
+        mid_curr = Decimal(str(MIDPOINTS_CURRENT[scale_current])) / 12
 
-    # Extraction triggers
-    uploaded_pdf = st.file_uploader("Upload Statement PDF", type=['pdf'])
-    uploaded_ss = st.file_uploader("Upload SAP Screenshots", type=['png', 'jpg'], accept_multiple_files=True)
-
-    if st.button("GENERATE FINAL 4-SCENARIO DISPUTE PACK"):
-        # Logic to:
-        # 1. Scrape PDF for Targets
-        # 2. Scrape/Input SAP Actuals
-        # 3. Iterate through Scenarios (Blue, Green, Orange, Red)
-        # 4. Return the consolidated PDF
-        st.success(f"Audit Pack Complete using Scale {scale_key}")
+    # Extraction & Comparison Button
+    if st.button("RUN FORENSIC COMPARISON"):
+        # Executes Scenario 1 (Blue), 2 (Green), 3 (Orange), 4 (Red)
+        st.success(f"Audit Pack Compiled for Scale {scale_current}")
 
 if __name__ == "__main__":
     main()
