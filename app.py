@@ -7,35 +7,41 @@ from decimal import Decimal, ROUND_HALF_UP
 from fpdf import FPDF
 from datetime import datetime
 
-# --- PROFILE WEIGHTS ---
-PROFILES = {
-    "Standard AE / SMME": {
-        "statement": {"Radio Classic": 45.0, "TV Classic": 24.0, "TV Sponsorship": 6.0, "Radio Sponsorship": 15.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5},
-        "policy": {"TV Classic": 40.0, "Radio Classic": 30.0, "TV Sponsorship": 10.0, "Radio Sponsorship": 10.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5},
-        "display_stmt": "45/24/6", "display_pol": "40/30/10"
-    },
-    "Sports PM": {
-        "statement": {"Digital": 10.0, "Radio Sport Sponsorship": 30.0, "TV Sport Sponsorship": 60.0},
-        "policy": {"Digital": 10.0, "Radio Sport Sponsorship": 30.0, "TV Sport Sponsorship": 60.0},
-        "display_stmt": "10/30/60", "display_pol": "10/30/60"
-    }
-}
-
-# --- SALARY SCALES ---
+# --- FULL SALARY SCALES (ORIGINAL) ---
 MIDPOINTS_2021 = {'110A': 3310313, '110B': 2648250, '115A': 2118600, '115B': 1765500, '120': 1650000, '125': 1175508, '130': 904237, '300': 459910, '401': 416379, '402': 327316, '403': 254447, '404': 199286, '405': 153057, '406': 135132, '407': 100704, '408': 71634}
 MIDPOINTS_CURRENT = {'110A': 3459277, '110': 3182534, '110B': 2767421, '115': 2546028, '115A': 2213937, '115B': 1844948, '120': 1724250, '125A': 1412667, '125': 1228406, '130A': 1091391, '130B': 1039420, '130': 944928, '300': 480606, '401': 435116, '402B': 394241, '402': 342045, '403': 265897, '404': 208254, '405': 159945, '405A': 141872, '406B': 122336}
 
-# --- SAP DATA REPOSITORY (25/26 Financial Year) ---
+# --- SAP DATA REPOSITORY (UPDATED FY26 RADIO & TV REVENUE) ---
+# Format: { "Month": (Radio_Actual, TV_Actual) }
 SAP_DATA_25_26 = {
-    "April": (1994172.36, 4413357.92), "May": (1695579.59, 10031033.78), "June": (2458550.76, 6796250.05),
-    "July": (1472644.74, 8553218.60), "August": (3458607.79, 11862475.53), "September": (2348743.96, 5387932.09),
-    "October": (3120609.85, 17508431.93), "November": (4015248.49, 14155035.46), "December": (7851158.14, 20839700.17),
-    "January": (2670369.08, 13925350.09), "February": (2334959.23, 11571852.77), "March": (2426110.27, 4731844.09)
+    "April": (2203779.00, 4505945.00),
+    "May": (1538161.00, 10188453.00),
+    "June": (1694411.00, 4538062.00),
+    "July": (1467963.00, 8661770.00),
+    "August": (3458608.00, 9990594.00),
+    "September": (2296581.00, 5831207.00),
+    "October": (3452423.00, 12681402.00),
+    "November": (4283430.00, 12475440.00),
+    "December": (3519159.00, 25149365.00),
+    "January": (2635456.00, 14276893.00),
+    "February": (2294525.00, 11612287.00),
+    "March": (2401005.00, 13393847.00)
+}
+
+PROFILES = {
+    "Standard AE / SMME": {
+        "statement": {"Radio Classic": 45.0, "TV Classic": 24.0, "TV Sponsorship": 6.0, "Radio Sponsorship": 15.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5},
+        "policy": {"TV Classic": 40.0, "Radio Classic": 30.0, "TV Sponsorship": 10.0, "Radio Sponsorship": 10.0, "Digital": 5.0, "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5}
+    },
+    "Sports PM": {
+        "statement": {"Digital": 10.0, "Radio Sport Sponsorship": 30.0, "TV Sport Sponsorship": 60.0},
+        "policy": {"Digital": 10.0, "Radio Sport Sponsorship": 30.0, "TV Sport Sponsorship": 60.0}
+    }
 }
 
 ALL_SEGMENTS = ["Digital", "Radio Classic", "Radio Sponsorship", "Radio Sport Sponsorship", "TV Classic", "TV Sponsorship", "TV Sport Sponsorship"]
 
-# --- CORE LOGIC ---
+# --- FUNCTIONS ---
 def get_mult(score):
     if score < 100: return Decimal('0.00')
     if score == 100: return Decimal('0.50')
@@ -79,47 +85,48 @@ def extract_file_data(file_obj):
     except: pass
     return data
 
-def run_scenario(entries, mid, w_map, logic_type='absorbed'):
+def swap_act_tar(seg):
+    """Callback for UI-driven swap"""
+    st.session_state[f"tar_{seg}"] = st.session_state[f"act_{seg}"]
+    st.session_state[f"act_{seg}"] = 0.0
+
+def run_scenario(entries, mid, weights, logic='absorbed'):
     lines, sum_seg = [], Decimal('0')
-    ta = sum(Decimal(str(e["act"])) for e in entries if e["name"] in w_map)
-    tt = sum(Decimal(str(e["tar"])) for e in entries if e["name"] in w_map)
+    ta = sum(Decimal(str(e["act"])) for e in entries if e["name"] in weights)
+    tt = sum(Decimal(str(e["tar"])) for e in entries if e["name"] in weights)
     ach_total = (ta / tt * 100) if tt > 0 else Decimal('0')
     mult = get_mult(ach_total)
     m_pay = (mid * mult).quantize(Decimal('0.01'), ROUND_HALF_UP)
     for e in entries:
-        w = Decimal(str(w_map.get(e["name"], 0))) / 100
+        w = Decimal(str(weights.get(e["name"], 0))) / 100
         if w == 0: continue
         a, t = Decimal(str(e["act"])), Decimal(str(e["tar"]))
         pct = (a / t * 100) if t > 0 else Decimal('0')
         sc = (mid * w) if pct >= 100 else Decimal('0')
         sum_seg += sc
         lines.append(f"{e['name']:<23} R{a:>11,.2f} | R{t:>11,.2f} | {pct:>7.1f}% | R{sc:>11,.2f}")
-    total = max(sum_seg, m_pay) if logic_type == 'absorbed' else sum_seg + m_pay
-    return {"lines": lines, "sum_seg": sum_seg, "m_pay": m_pay, "tot": total, "mult": mult, "ach": ach_total}
-
-# --- RESTORED SWAP FUNCTION ---
-def swap_act_tar(seg):
-    st.session_state[f"tar_{seg}"] = st.session_state[f"act_{seg}"]
-    st.session_state[f"act_{seg}"] = 0.0
+    tot = max(sum_seg, m_pay) if logic == 'absorbed' else sum_seg + m_pay
+    return {"lines": lines, "sum_seg": sum_seg, "m_pay": m_pay, "tot": tot, "mult": mult, "ach": ach_total}
 
 # --- UI SETUP ---
 st.set_page_config(page_title="BEMAWU Forensic Audit", layout="wide")
 st.title("BEMAWU Dual-Profile Forensic Simulator")
 
-if "init_state" not in st.session_state:
-    st.session_state.update({"emp_name": "", "pers_num": "", "period": "", "init_state": True})
+if "emp_name" not in st.session_state:
+    st.session_state.update({"emp_name": "", "pers_num": "", "period": "", "midpoint_val": "0.00"})
     for s in ALL_SEGMENTS:
-        st.session_state[f"act_{s}"], st.session_state[f"tar_{s}"] = 0.0, 1.0
+        st.session_state[f"act_{s}"] = 0.0
+        st.session_state[f"tar_{s}"] = 1.0
 
-prof_key = st.radio("Select AE Profile:", list(PROFILES.keys()), horizontal=True)
-uploaded_file = st.file_uploader("Upload SABC Statement PDF", type=['pdf'])
+prof_key = st.radio("Select Profile Category:", list(PROFILES.keys()), horizontal=True)
+uploaded_file = st.file_uploader("Upload Statement PDF", type=['pdf'])
 
 if uploaded_file:
     data = extract_file_data(uploaded_file)
     st.session_state["emp_name"] = data["emp_name"]
     st.session_state["pers_num"] = data["pers_num"]
     st.session_state["period"] = data["period"]
-    st.session_state["mid_input_val"] = f"{data['midpoint']:.2f}"
+    st.session_state["midpoint_val"] = f"{data['midpoint']:.2f}"
     for s in ALL_SEGMENTS:
         st.session_state[f"act_{s}"] = data["segments"][s]["act"]
         st.session_state[f"tar_{s}"] = data["segments"][s]["tar"]
@@ -131,10 +138,9 @@ emp_name = ce1.text_input("Confirm Name:", value=st.session_state["emp_name"])
 pers_num = ce2.text_input("Confirm Personnel #:", value=st.session_state["pers_num"])
 period_str = ce3.text_input("Confirm Period:", value=st.session_state["period"])
 
-cm1, cm2, cm3 = st.columns(3)
-mid_stmt_input = cm1.text_input("Statement Midpoint:", value=st.session_state.get("mid_input_val", "0.00"))
-scale_2021 = cm2.selectbox("2021 Scale:", list(MIDPOINTS_2021.keys()))
-scale_curr = cm3.selectbox("Current Scale:", list(MIDPOINTS_CURRENT.keys()))
+cm1, cm3 = st.columns([1, 2])
+mid_stmt_input = cm1.text_input("Statement Midpoint:", value=st.session_state["midpoint_val"])
+scale_curr = cm3.selectbox("Current Midpoints (Scale Code):", list(MIDPOINTS_CURRENT.keys()))
 
 st.subheader("2. Stream Overrides (🔴 Swap Actuals and Targets)")
 entries = []
@@ -144,13 +150,13 @@ for s in visible_segments:
     cols[0].write(f"**{s}**")
     act_v = cols[1].number_input(f"Act {s}", key=f"act_{s}", step=100.0, label_visibility="collapsed")
     tar_v = cols[2].number_input(f"Tar {s}", key=f"tar_{s}", step=100.0, label_visibility="collapsed")
-    cols[3].button("🔴 Swap", key=f"swap_b_{s}", on_click=swap_act_tar, args=(s,))
+    cols[3].button("🔴 Swap", key=f"btn_sw_{s}", on_click=swap_act_tar, args=(s,))
     entries.append({"name": s, "act": act_v, "tar": tar_v})
 
 # --- SAP INTEGRATION ---
 activate_sap = st.checkbox("Reconcile with SAP Data?") if prof_key == "Standard AE / SMME" else True
 if activate_sap:
-    st.subheader("📊 SAP Reconciliation (Matched from Reference)")
+    st.subheader("📊 SAP Reconciliation (Matched from Reference Tables)")
     month_match = next((m for m in SAP_DATA_25_26.keys() if m in period_str), "April")
     sap_r, sap_t = SAP_DATA_25_26.get(month_match, (0.0, 0.0))
     sc1, sc2 = st.columns(2)
@@ -187,7 +193,7 @@ if st.button("RUN FULL FORENSIC COMPARISON", type="primary", use_container_width
 
     st.code(final_report, language="text")
     
-    # Filename Generation
+    # Filename Generation: [Personnel]_[Name]_[Period].pdf
     fn = f"{pers_num}_{emp_name.replace(' ','_')}_{period_str.replace(' ','_')}.pdf"
     pdf = FPDF()
     pdf.add_page(); pdf.set_font("Courier", size=8); pdf.multi_cell(0, 4, final_report.encode('latin-1','replace').decode('latin-1'))
