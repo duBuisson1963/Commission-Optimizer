@@ -582,3 +582,62 @@ if analysis_mode == "Single Statement":
                 
         except Exception as e:
             st.error(f"Calculation Error: Check inputs. Details: {e}")
+# --- SAP FIGURES UPLOAD SECTION ---
+st.divider()
+st.subheader("SAP Figures Upload (Year Under Review)")
+
+sap_file = st.file_uploader("Upload SAP Spreadsheet or Screenshot", 
+                            type=['csv','xlsx','png','jpg'])
+
+if sap_file is not None:
+    parse_mode = st.radio("Where should SAP figures be parsed?", 
+                          ["Replace Actuals", "Supplemental Comparison", "Midpoint Only"],
+                          help="Choose how SAP figures should be integrated into calculations.")
+
+    sap_data = {}
+    if sap_file.name.endswith(('.csv','.xlsx')):
+        try:
+            if sap_file.name.endswith('.csv'):
+                df_sap = pd.read_csv(sap_file)
+            else:
+                df_sap = pd.read_excel(sap_file)
+
+            # Expecting columns: Segment, Actual
+            for _, row in df_sap.iterrows():
+                seg = str(row.get('Segment','')).strip()
+                act = float(row.get('Actual',0))
+                sap_data[seg] = act
+            st.success("SAP spreadsheet parsed successfully!")
+
+            # --- Integration with current midpoint ---
+            if parse_mode in ["Replace Actuals", "Midpoint Only"]:
+                # Build entries using SAP actuals
+                sap_entries = []
+                for s in ALL_SEGMENTS:
+                    act_val = sap_data.get(s, 0.0)
+                    tar_val = st.session_state.get(f"tar_{s}", 1.0)
+                    sap_entries.append({"name": s, "act": act_val, "tar": tar_val})
+
+                mid_curr = (Decimal(str(MIDPOINTS_CURRENT[scale_current])) / 12).quantize(Decimal('0.01'), ROUND_HALF_UP)
+                ta = sum(Decimal(str(e["act"])) for e in sap_entries)
+                tt = sum(Decimal(str(e["tar"])) for e in sap_entries)
+                rev_ach = (ta / tt * 100).quantize(Decimal('0.01')) if tt > 0 else Decimal('0')
+                m = get_mult(rev_ach)
+
+                m_pay_curr = (mid_curr * m).quantize(Decimal('0.01'), ROUND_HALF_UP)
+                applied_sap = run_scenario(sap_entries, mid_curr, PROFILES[selected_profile]["statement"], m_pay_curr, 'absorbed')
+
+                # --- Reporting ---
+                rep_sap = "\n--- SAP ACTUALS COMPARISON ---\n"
+                rep_sap += f"Applied Midpoint: R {mid_curr:,.2f} (Scale {scale_current})\n"
+                rep_sap += f"Total Actual Sales (SAP): R {ta:,.2f}\n"
+                rep_sap += f"Total Target Sales: R {tt:,.2f}\n"
+                rep_sap += f"Achievement: {rev_ach}% | Multiplier: {m}x\n"
+                rep_sap += f"Commission Due (SAP Basis): R {applied_sap['tot']:,.2f}\n"
+                st.code(rep_sap, language="text")
+
+        except Exception as e:
+            st.error(f"Error parsing SAP file: {e}")
+
+    else:
+        st.info("Screenshots uploaded are stored for reference only (not parsed).")
