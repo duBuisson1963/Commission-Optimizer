@@ -8,7 +8,8 @@ from fpdf import FPDF
 from datetime import datetime
 
 # ---------------- CONFIG ----------------
-st.set_page_config(page_title="Forensic Commission Audit System", layout="wide")
+st.set_page_config(page_title="BEMAWU Forensic Audit", layout="wide")
+st.title("BEMAWU Dual-Profile Forensic Simulator")
 
 ALL_SEGMENTS = [
     "Digital", "Radio Classic", "Radio Sponsorship",
@@ -20,7 +21,8 @@ PROFILES = {
     "Standard AE / SMME": {
         "statement": {"Radio Classic": 45.0, "TV Classic": 24.0, "TV Sponsorship": 6.0,
                       "Radio Sponsorship": 15.0, "Digital": 5.0,
-                      "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5}
+                      "TV Sport Sponsorship": 2.5, "Radio Sport Sponsorship": 2.5},
+        "display_stmt": "45/24/6"
     }
 }
 
@@ -29,27 +31,44 @@ MIDPOINTS_CURRENT = {
 }
 
 # ---------------- MULTIPLIER ----------------
-def get_multiplier_from_pct(pct):
-    pct = Decimal(str(pct))
-    if pct < 100: return Decimal('0.00')
-    elif pct == 100: return Decimal('0.50')
-    elif pct <= 120: return Decimal('1.00')
-    elif pct <= 150: return Decimal('2.10')
-    elif pct <= 180: return Decimal('4.10')
+def get_mult(score):
+    score = Decimal(str(score))
+    if score < 100: return Decimal('0.00')
+    elif score == 100: return Decimal('0.50')
+    elif score <= 120: return Decimal('1.00')
+    elif score <= 150: return Decimal('2.10')
+    elif score <= 180: return Decimal('4.10')
     else: return Decimal('6.20')
 
-# ---------------- SCENARIO ENGINE ----------------
-def run_scenario(entries, midpoint, weights, multiplier_pay):
-    total = Decimal('0')
+# ---------------- HELPERS ----------------
+def parse_sabc_number(num_str):
+    if not num_str: return 0.0
+    num_str = num_str.replace(",", "")
+    return float(num_str)
+
+# ---------------- SCENARIO ----------------
+def run_scenario(entries, mid, w_map, m_pay):
+    lines, sum_seg = [], Decimal('0')
+
     for e in entries:
-        act = Decimal(str(e["act"]))
-        tar = Decimal(str(e["tar"]))
-        weight = Decimal(str(weights.get(e["name"], 0))) / 100
+        a = Decimal(str(e["act"]))
+        t = Decimal(str(e["tar"]))
+        w = Decimal(str(w_map.get(e["name"], 0))) / 100
 
-        if tar > 0 and act / tar >= 1:
-            total += midpoint * weight
+        if w == 0:
+            continue
 
-    return max(total, multiplier_pay)
+        ach = a / t if t > 0 else Decimal('0')
+        sc = (mid * w) if ach >= 1 else Decimal('0')
+
+        sum_seg += sc
+
+        lines.append(
+            f"{e['name']:<23} R{a:>11,.2f} | R{t:>11,.2f} | {ach*100:>7.1f}% | R{sc:>11,.2f}"
+        )
+
+    total = max(sum_seg, m_pay)
+    return {"lines": lines, "sum_seg": sum_seg, "tot": total}
 
 # ---------------- FILE EXTRACTION ----------------
 @st.cache_data
@@ -57,29 +76,31 @@ def extract_file_data(file_obj):
     data = {s: {"act": 0.0, "tar": 1.0} for s in ALL_SEGMENTS}
 
     try:
-        bytes_data = file_obj.read()
+        file_bytes = file_obj.read()
 
-        if file_obj.name.endswith(".pdf"):
-            reader = PyPDF2.PdfReader(io.BytesIO(bytes_data))
+        if file_obj.name.lower().endswith('.pdf'):
+            reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
             text = ""
             for p in reader.pages:
                 text += p.extract_text() or ""
 
             for s in ALL_SEGMENTS:
-                match = re.search(rf"{s}.*?(\d[\d,]+\.\d{{2}}).*?(\d[\d,]+\.\d{{2}})", text)
+                pattern = rf"{s}[^\d]*?(-?\d[\d,]+\.\d{{2}})[^\d]*?(-?\d[\d,]+\.\d{{2}})"
+                match = re.search(pattern, text)
                 if match:
-                    data[s]["act"] = float(match.group(1).replace(",", ""))
-                    data[s]["tar"] = float(match.group(2).replace(",", ""))
+                    data[s]["act"] = parse_sabc_number(match.group(1))
+                    data[s]["tar"] = parse_sabc_number(match.group(2))
 
-        elif file_obj.name.endswith(".csv"):
-            df = pd.read_csv(io.BytesIO(bytes_data))
+        elif file_obj.name.lower().endswith('.csv'):
+            df = pd.read_csv(io.BytesIO(file_bytes))
 
-        elif file_obj.name.endswith(".xlsx"):
-            df = pd.read_excel(io.BytesIO(bytes_data))
+        elif file_obj.name.lower().endswith('.xlsx'):
+            df = pd.read_excel(io.BytesIO(file_bytes))
 
         if 'df' in locals():
             for _, row in df.iterrows():
                 seg = str(row.get("Segment", "")).strip()
+
                 for s in ALL_SEGMENTS:
                     if seg.lower() == s.lower():
                         data[s]["act"] = float(row.get("Actual", 0))
@@ -90,141 +111,129 @@ def extract_file_data(file_obj):
 
     return data
 
-# ---------------- SAP PROCESSING ----------------
-def process_sap(df, segment_col, actual_col, target_col, mapping):
-    sap_entries = []
-
-    for seg in ALL_SEGMENTS:
-        keyword = mapping[seg].lower()
-
-        filt = df[df[segment_col].str.lower().str.contains(keyword, na=False)]
-
-        act = filt[actual_col].sum()
-        tar = filt[target_col].sum() if target_col else 1
-
-        sap_entries.append({"name": seg, "act": act, "tar": tar})
-
-    return sap_entries
-
-# ---------------- RECON ----------------
-def reconcile(stmt, sap):
-    rows = []
-    for seg in ALL_SEGMENTS:
-        s_val = stmt[seg]["act"]
-        sap_val = next(e["act"] for e in sap if e["name"] == seg)
-        diff = sap_val - s_val
-        rows.append((seg, s_val, sap_val, diff))
-    return rows
-
-# ---------------- REPORT ----------------
-def build_report(recon_rows, paid, correct):
-    rep = "FORENSIC REPORT\n\n"
-
-    rep += "DATA RECONCILIATION\n"
-    rep += "-"*70 + "\n"
-    rep += f"{'SEGMENT':<25}{'STATEMENT':>15}{'SAP':>15}{'VAR':>15}\n"
-
-    for r in recon_rows:
-        rep += f"{r[0]:<25}{r[1]:>15,.2f}{r[2]:>15,.2f}{r[3]:>15,.2f}\n"
-
-    rep += "\n"
-    rep += f"PAID: R {paid:,.2f}\n"
-    rep += f"CORRECT: R {correct:,.2f}\n"
-    rep += f"UNDERPAYMENT: R {correct - paid:,.2f}\n\n"
-
-    rep += "FORENSIC DECLARATION:\n"
-    rep += "SAP treated as system of record. Variances indicate potential underpayment.\n"
-
-    return rep
-
 # ---------------- UI ----------------
-st.title("Forensic Commission Audit System")
+stmt_file = st.file_uploader("Upload Commission Statement", type=["pdf", "csv", "xlsx"])
 
-# Upload Statement
-stmt_file = st.file_uploader("Upload Commission Statement", type=["pdf","csv","xlsx"])
+entries = []
 
-stmt_data = None
 if stmt_file:
     stmt_data = extract_file_data(stmt_file)
+
+    for s in ALL_SEGMENTS:
+        entries.append({
+            "name": s,
+            "act": stmt_data[s]["act"],
+            "tar": stmt_data[s]["tar"]
+        })
+
     st.success("Statement Loaded")
 
-# SAP Upload
-sap_file = st.file_uploader("Upload SAP Data", type=["xlsx","csv"])
+# ---------------- SAP MODULE ----------------
+st.divider()
+st.header("SAP DATA RECONCILIATION (OPTIONAL)")
 
-sap_df = None
-if sap_file:
-    if sap_file.name.endswith(".xlsx"):
-        sap_df = pd.read_excel(sap_file)
-    else:
-        sap_df = pd.read_csv(sap_file)
+sap_file = st.file_uploader("Upload SAP Data", type=["xlsx", "csv"], key="sap")
 
-# Mapping
 sap_entries = []
-if sap_df is not None:
-    st.subheader("Map SAP Columns")
 
-    seg_col = st.selectbox("Segment Column", sap_df.columns)
-    act_col = st.selectbox("Actual Column", sap_df.columns)
-    tar_col = st.selectbox("Target Column", ["None"] + list(sap_df.columns))
+if sap_file:
+    try:
+        if sap_file.name.endswith('.xlsx'):
+            sap_df = pd.read_excel(sap_file)
+        else:
+            sap_df = pd.read_csv(sap_file)
 
-    mapping = {}
-    for seg in ALL_SEGMENTS:
-        mapping[seg] = st.text_input(f"Keyword for {seg}", seg)
+        seg_col = st.selectbox("Segment Column", sap_df.columns)
+        act_col = st.selectbox("Actual Column", sap_df.columns)
+        tar_col = st.selectbox("Target Column", ["None"] + list(sap_df.columns))
 
-    if st.button("Process SAP"):
-        sap_entries = process_sap(
-            sap_df,
-            seg_col,
-            act_col,
-            None if tar_col=="None" else tar_col,
-            mapping
-        )
-        st.success("SAP Processed")
+        mapping = {}
+        for s in ALL_SEGMENTS:
+            mapping[s] = st.text_input(f"Keyword for {s}", value=s)
 
-# Run Analysis
+        if st.button("Process SAP Data"):
+            for s in ALL_SEGMENTS:
+                keyword = mapping[s].lower()
+                filt = sap_df[sap_df[seg_col].astype(str).str.lower().str.contains(keyword, na=False)]
+
+                act_val = filt[act_col].sum()
+                tar_val = filt[tar_col].sum() if tar_col != "None" else 1.0
+
+                sap_entries.append({
+                    "name": s,
+                    "act": float(act_val),
+                    "tar": float(tar_val)
+                })
+
+            st.success("SAP Data Processed")
+
+    except Exception as e:
+        st.error(f"SAP Error: {e}")
+
+# ---------------- RUN ----------------
 if st.button("RUN FORENSIC ANALYSIS"):
 
-    if not stmt_data or not sap_entries:
-        st.error("Upload both Statement and SAP data")
+    if not entries:
+        st.error("Upload a statement first")
     else:
         weights = PROFILES["Standard AE / SMME"]["statement"]
 
-        midpoint = Decimal(MIDPOINTS_CURRENT['130']) / 12
+        mid_curr = (Decimal(MIDPOINTS_CURRENT['130']) / 12).quantize(Decimal('0.01'))
 
-        # Statement calc
-        stmt_entries = [
-            {"name": s, "act": stmt_data[s]["act"], "tar": stmt_data[s]["tar"]}
-            for s in ALL_SEGMENTS
-        ]
+        ta = sum(Decimal(str(e["act"])) for e in entries)
+        tt = sum(Decimal(str(e["tar"])) for e in entries)
 
-        ta = sum(e["act"] for e in stmt_entries)
-        tt = sum(e["tar"] for e in stmt_entries)
+        rev_ach = (ta / tt * 100) if tt > 0 else Decimal('0')
+        m = get_mult(rev_ach)
 
-        pct = (ta/tt)*100 if tt>0 else 0
-        mult = get_multiplier_from_pct(pct)
+        m_pay = mid_curr * m
 
-        paid = run_scenario(stmt_entries, midpoint, weights, midpoint*mult)
+        applied = run_scenario(entries, mid_curr, weights, m_pay)
 
-        # SAP calc
-        ta2 = sum(e["act"] for e in sap_entries)
-        tt2 = sum(e["tar"] for e in sap_entries)
+        rep = "--- STATEMENT CALCULATION ---\n"
+        rep += "\n".join(applied["lines"])
+        rep += f"\nTOTAL COMMISSION: R {applied['tot']:,.2f}\n\n"
 
-        pct2 = (ta2/tt2)*100 if tt2>0 else 0
-        mult2 = get_multiplier_from_pct(pct2)
+        # ---------------- SAP EXTENSION ----------------
+        if sap_entries:
+            rep += "\n--- SAP RECONCILIATION ---\n\n"
+            rep += f"{'STREAM':<23}{'STMT':>12}{'SAP':>12}{'VAR':>12}\n"
 
-        correct = run_scenario(sap_entries, midpoint, weights, midpoint*mult2)
+            total_stmt = Decimal('0')
+            total_sap = Decimal('0')
 
-        recon_rows = reconcile(stmt_data, sap_entries)
+            for s in ALL_SEGMENTS:
+                stmt_val = next(e["act"] for e in entries if e["name"] == s)
+                sap_val = next((e["act"] for e in sap_entries if e["name"] == s), 0)
 
-        report = build_report(recon_rows, paid, correct)
+                var = Decimal(str(sap_val)) - Decimal(str(stmt_val))
 
-        st.code(report)
+                total_stmt += Decimal(str(stmt_val))
+                total_sap += Decimal(str(sap_val))
 
-        # PDF
+                rep += f"{s:<23}{stmt_val:>12,.2f}{sap_val:>12,.2f}{var:>12,.2f}\n"
+
+            rep += "\n"
+
+            ta_sap = sum(Decimal(str(e["act"])) for e in sap_entries)
+            tt_sap = sum(Decimal(str(e["tar"])) for e in sap_entries)
+
+            rev_ach_sap = (ta_sap / tt_sap * 100) if tt_sap > 0 else Decimal('0')
+            m_sap = get_mult(rev_ach_sap)
+
+            m_pay_sap = mid_curr * m_sap
+
+            sap_calc = run_scenario(sap_entries, mid_curr, weights, m_pay_sap)
+
+            rep += f"\nCORRECT COMMISSION (SAP): R {sap_calc['tot']:,.2f}\n"
+            rep += f"UNDERPAYMENT: R {(sap_calc['tot'] - applied['tot']):,.2f}\n"
+
+        st.code(rep)
+
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Courier", size=8)
-        pdf.multi_cell(0, 4, report)
+        pdf.multi_cell(0, 4, rep)
 
         st.download_button(
             "Download PDF",
